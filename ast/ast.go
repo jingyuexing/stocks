@@ -16,8 +16,9 @@ const (
 	TextLiteral
 	DurationLiteral
 	PercentLiteral
+	ReferenceLiteral
+	LiteralExpression
 
-	
 	// 买入
 	BuyExpression
 	// 卖出
@@ -36,12 +37,30 @@ const (
 	// stop -12% 持有止于减少到12%
 	StopExpression
 
+	SwapExpression
+
 	RangeExpression
 	// 定义 bar: name
 	DefineStatement
 	// Reference 引用
 	// @bar
 	ReferenceStatement
+
+	// Select 选择股票代码
+	// select AUL
+	SelectExpression
+
+	// Grid 网格交易
+	// grid { loss 10% { sell 100% } profit 10% { sell 50% } }
+	GridExpression
+	// Loss 亏损分支
+	LossExpression
+	// Profit 盈利分支
+	ProfitExpression
+	// Value 资金配置
+	// value: name 1000
+	ValueStatement
+
 	// a year
 	YearUnit
 	// a month
@@ -49,6 +68,7 @@ const (
 	// day
 	DayUnit
 	///
+	WeekUnit
 	///  hour
 	HourUnit
 	// min
@@ -83,6 +103,18 @@ func (t NodeType) String() string {
 		return "DefineStatement"
 	case ReferenceStatement:
 		return "ReferenceStatement"
+	case LiteralExpression:
+		return "LiteralExpression"
+	case SelectExpression:
+		return "SelectExpression"
+	case GridExpression:
+		return "GridExpression"
+	case LossExpression:
+		return "LossExpression"
+	case ProfitExpression:
+		return "ProfitExpression"
+	case ValueStatement:
+		return "ValueStatement"
 	case YearUnit:
 		return "YearUnit"
 	case MonthUnit:
@@ -117,13 +149,12 @@ type Literal struct {
 type RangeExpressionNode struct {
 	Node
 	Begin Literal
-	End Literal
+	End   Literal
 }
-
 
 type ExpressionNode struct {
 	Node
-	Name   string
+	Name string
 	// 关键字后面的数据视为参数
 	Params []Literal
 	// 范围
@@ -131,6 +162,9 @@ type ExpressionNode struct {
 
 	// value 定义的值
 	Value Literal
+
+	// Body 用于块级表达式（如 grid、loss、profit）
+	Body []ExpressionNode
 }
 
 type RootNode struct {
@@ -139,17 +173,28 @@ type RootNode struct {
 }
 
 func (literal Literal) String() string {
-	switch literal.Type{
+	switch literal.Type {
 	case FloatLiteral:
 		if literal.Unit == "%" {
-			value,_ := strconv.ParseFloat(literal.Value,64)
-			return fmt.Sprintf("%f",value / 100)
+			value, _ := strconv.ParseFloat(literal.Value, 64)
+			return fmt.Sprintf("%f", value/100)
 		}
 		return literal.Value
 	case IntegerLiteral:
-
 		return literal.Value
 	default:
 		return ""
 	}
+}
+
+// AsFloat 将字面量解析为 float64
+func (literal Literal) AsFloat() float64 {
+	v, _ := strconv.ParseFloat(literal.Value, 64)
+	return v
+}
+
+// AsInt 将字面量解析为 int
+func (literal Literal) AsInt() int {
+	v, _ := strconv.Atoi(literal.Value)
+	return v
 }

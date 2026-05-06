@@ -1,8 +1,8 @@
 package tokenizer
 
-type TokenKint string
+type TokenKind string
 
-func (t TokenKint) Numberic() uint {
+func (t TokenKind) Numberic() uint {
 	switch t {
 	case KeywordSell:
 		return 0x1
@@ -12,57 +12,94 @@ func (t TokenKint) Numberic() uint {
 		return 0x3
 	case KeywordKeep:
 		return 0x4
-	case Integer:
+	case KeywordSelect:
 		return 0x5
-	case Float:
+	case KeywordValue:
 		return 0x6
-	case Per:
+	case KeywordGrid:
 		return 0x7
-	case Text:
+	case KeywordLoss:
 		return 0x8
-	case Identifier:
+	case KeywordProfit:
 		return 0x9
-	case Terminator:
+	case Integer:
 		return 0xa
-	case Colon:
+	case Float:
 		return 0xb
-	case At:
+	case Per:
 		return 0xc
-	case TribleDot:
+	case Text:
 		return 0xd
-	case Negative:
+	case Identifier:
 		return 0xe
-	case Time:
+	case Terminator:
 		return 0xf
+	case Colon:
+		return 0x10
+	case At:
+		return 0x11
+	case TribleDot:
+		return 0x12
+	case Negative:
+		return 0x13
+	case Time:
+		return 0x14
+	case LeftBraces:
+		return 0x15
+	case RightBraces:
+		return 0x16
+	case Plus:
+		return 0x17
+	case EOF:
+		return 0x18
 	default:
 		return 0
 	}
 }
 
+func (t TokenKind) IsKeyword() bool {
+	switch t {
+	case KeywordBuy, KeywordSell, KeywordStop, KeywordKeep,
+		KeywordSelect, KeywordValue, KeywordGrid, KeywordLoss, KeywordProfit:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
-	KeywordSell TokenKint = "sell"
-	KeywordBuy  TokenKint = "buy"
-	KeywordStop TokenKint = "stop"
-	KeywordKeep TokenKint = "keep"
-	Integer     TokenKint = "integer"
-	Text        TokenKint = "text"
-	Float       TokenKint = "float"
-	Per         TokenKint = "percent"
-	Terminator  TokenKint = "terminator"
-	Colon       TokenKint = "colon"
-	Identifier  TokenKint = "identifier"
-	Negative    TokenKint = "negative"
-	At          TokenKint = "at"
-	TribleDot   TokenKint = "Tribledot"
-	Time        TokenKint = "Time"
+	KeywordSell   TokenKind = "sell"
+	KeywordBuy    TokenKind = "buy"
+	KeywordStop   TokenKind = "stop"
+	KeywordKeep   TokenKind = "keep"
+	KeywordLoss   TokenKind = "loss"
+	KeywordProfit TokenKind = "profit"
+	KeywordGrid   TokenKind = "grid"
+	KeywordSelect TokenKind = "select"
+	KeywordValue  TokenKind = "value"
+	Integer       TokenKind = "integer"
+	Text          TokenKind = "text"
+	Float         TokenKind = "float"
+	Per           TokenKind = "percent"
+	Terminator    TokenKind = "terminator"
+	Colon         TokenKind = "colon"
+	Identifier    TokenKind = "identifier"
+	Negative      TokenKind = "negative"
+	At            TokenKind = "at"
+	TribleDot     TokenKind = "Tribledot"
+	Time          TokenKind = "Time"
+	LeftBraces    TokenKind = "LeftBraces"
+	RightBraces   TokenKind = "RightBraces"
+	Plus          TokenKind = "Plus"
+	EOF           TokenKind = "EOF"
 )
 
 type Token struct {
-	Kind  TokenKint
+	Kind  TokenKind
 	Value string
 }
 
-func createToken(kind TokenKint, value string) Token {
+func createToken(kind TokenKind, value string) Token {
 	return Token{
 		Kind:  kind,
 		Value: value,
@@ -80,6 +117,16 @@ func createIdentifier(val string) Token {
 		token = createToken(KeywordStop, val)
 	case "keep":
 		token = createToken(KeywordKeep, val)
+	case "grid":
+		token = createToken(KeywordGrid, val)
+	case "loss":
+		token = createToken(KeywordLoss, val)
+	case "profit":
+		token = createToken(KeywordProfit, val)
+	case "select":
+		token = createToken(KeywordSelect, val)
+	case "value":
+		token = createToken(KeywordValue, val)
 	default:
 		token = createToken(Identifier, val)
 	}
@@ -95,6 +142,7 @@ func TokenIsNumber(token Token) bool {
 	}
 }
 
+// 是否是时间单位
 func IsTimeUnit(val string) bool {
 	if val != "" {
 		switch val {
@@ -108,6 +156,7 @@ func IsTimeUnit(val string) bool {
 	return false
 }
 
+// 是否是金钱单位token
 func IsAmountUnit(val string) bool {
 	if val != "" {
 		switch val {
@@ -120,6 +169,7 @@ func IsAmountUnit(val string) bool {
 	return false
 }
 
+// 是否是时间单位Token
 func IsTimeUnitToken(token Token) bool {
 	return IsTimeUnit(token.Value)
 }
@@ -131,5 +181,4 @@ func IsLiteral(val Token) bool {
 	default:
 		return false
 	}
-
 }

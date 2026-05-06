@@ -56,6 +56,10 @@ func Lexer(text string) []Token {
 			)
 			nextChar()
 			continue
+		} else if ch == '+' {
+			tokens = append(tokens, createToken(Plus, string(ch)))
+			nextChar()
+			continue
 		} else if isValidChar(ch) {
 			val := ""
 			for isValidChar(ch) && current < MAXLENGTH {
@@ -70,6 +74,14 @@ func Lexer(text string) []Token {
 			continue
 		} else if ch == '@' {
 			tokens = append(tokens, createToken(At, string(ch)))
+			nextChar()
+			continue
+		} else if ch == '{' {
+			tokens = append(tokens, createToken(LeftBraces, string(ch)))
+			nextChar()
+			continue
+		} else if ch == '}' {
+			tokens = append(tokens, createToken(RightBraces, string(ch)))
 			nextChar()
 			continue
 		} else if ch == '-' {
@@ -114,5 +126,6 @@ func Lexer(text string) []Token {
 			current++
 		}
 	}
+	tokens = append(tokens, createToken(EOF, ""))
 	return tokens
 }
