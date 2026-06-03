@@ -1666,3 +1666,43 @@ func TestParserAnnotationSwitchComment(t *testing.T) {
 		t.Errorf("expected annotation name 'adapter_switch', got %s", expr.Name)
 	}
 }
+
+func TestParserStopLossSingleValue(t *testing.T) {
+	root := parser.Parser(tokenizer.Lexer("stop_loss -10%"))
+	if len(root.Expression) != 1 {
+		t.Fatalf("expected 1 expression, got %d", len(root.Expression))
+	}
+	expr := root.Expression[0]
+	if expr.Type != ast.StopLossExpression {
+		t.Errorf("expected StopLossExpression, got %v", expr.Type)
+	}
+	if expr.Range != nil {
+		t.Error("expected nil Range for single value")
+	}
+	if len(expr.Params) != 1 {
+		t.Fatalf("expected 1 param for single value, got %d", len(expr.Params))
+	}
+	if expr.Params[0].Value != "-10" {
+		t.Errorf("expected param value -10, got %s", expr.Params[0].Value)
+	}
+}
+
+func TestParserStopLossRange(t *testing.T) {
+	root := parser.Parser(tokenizer.Lexer("stop_loss -10%...-5%"))
+	if len(root.Expression) != 1 {
+		t.Fatalf("expected 1 expression, got %d", len(root.Expression))
+	}
+	expr := root.Expression[0]
+	if expr.Type != ast.StopLossExpression {
+		t.Errorf("expected StopLossExpression, got %v", expr.Type)
+	}
+	if expr.Range == nil {
+		t.Fatal("expected Range to be set")
+	}
+	if expr.Range.Begin.Value != "-10" {
+		t.Errorf("expected range begin -10, got %s", expr.Range.Begin.Value)
+	}
+	if expr.Range.End.Value != "-5" {
+		t.Errorf("expected range end -5, got %s", expr.Range.End.Value)
+	}
+}

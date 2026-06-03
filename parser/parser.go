@@ -555,6 +555,9 @@ func (p *parserImpl) parseRiskConfig() ast.ExpressionNode {
 		r := p.parseRange()
 		if r != nil {
 			expr.Range = r
+		} else if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
+			// 单点值，如 stop_loss -10%
+			expr.Params = append(expr.Params, p.parseLiteral())
 		}
 		if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "on" {
 			p.next()

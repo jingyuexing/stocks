@@ -263,7 +263,15 @@ func processExpressions(ctx *StockContext, expressions []ast.ExpressionNode) {
 				ctx.SetMaxPosition(parseFloatLiteral(exp.Params[0]))
 			}
 		case ast.StopLossExpression:
-			ctx.SetStopLossRange(exp.Range)
+			if exp.Range != nil {
+				ctx.SetStopLossRange(exp.Range)
+			} else if len(exp.Params) > 0 {
+				// 单点值构造为开放上限范围，如 stop_loss -10% => Begin=-10%, End=空
+				ctx.SetStopLossRange(&ast.RangeExpressionNode{
+					Node:  ast.Node{Type: ast.RangeExpression},
+					Begin: exp.Params[0],
+				})
+			}
 		case ast.SlippageToleranceExpression:
 			if len(exp.Params) > 0 {
 				ctx.SetSlippageTolerance(parseFloatLiteral(exp.Params[0]))

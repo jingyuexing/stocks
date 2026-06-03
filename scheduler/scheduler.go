@@ -15,10 +15,12 @@ import (
 type JobType string
 
 const (
-	JobTypePriceCheck JobType = "price_check" // 定时检查股价
-	JobTypeKeepCheck  JobType = "keep_check"  // 定时检查持仓时间
-	JobTypeStopCheck  JobType = "stop_check"  // 定时检查止损/止盈
-	JobTypeGridCheck  JobType = "grid_check"  // 定时检查网格交易条件
+	JobTypePriceCheck   JobType = "price_check"   // 定时检查股价
+	JobTypeKeepCheck    JobType = "keep_check"    // 定时检查持仓时间
+	JobTypeStopCheck    JobType = "stop_check"    // 定时检查止损/止盈
+	JobTypeGridCheck    JobType = "grid_check"    // 定时检查网格交易条件
+	JobTypeSessionCheck JobType = "session_check" // 定时检查交易时段
+	JobTypePauseCheck   JobType = "pause_check"   // 定时检查暂停日期
 )
 
 // Job 表示一个调度任务
@@ -37,6 +39,10 @@ type Scheduler struct {
 	jobs map[string]cron.EntryID
 	mu   sync.RWMutex
 	ctx  *transformer.StockContext
+
+	// 状态跟踪（用于 session / pause 状态变化检测）
+	sessionActive bool
+	paused        bool
 }
 
 // NewScheduler 创建新的调度器
