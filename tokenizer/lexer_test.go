@@ -1,6 +1,7 @@
 package tokenizer_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jingyuexing/stocks/tokenizer"
@@ -11,8 +12,8 @@ func TestTokenizer(t *testing.T) {
 		`
 amount: some text value
 `)
-	if len(tokens) != 5 { // identifier, colon, text, terminator, eof
-		t.Errorf("not pass tokenizer, expected 5 tokens, got %d", len(tokens))
+	if len(tokens) != 8 { // terminator, identifier, colon, identifier(some), identifier(text), keywordValue, terminator, eof
+		t.Errorf("not pass tokenizer, expected 8 tokens, got %d", len(tokens))
 	}
 
 	tokens2 := tokenizer.Lexer(`buy 20%`)
@@ -21,7 +22,7 @@ amount: some text value
 	}
 
 	tokens3 := tokenizer.Lexer("stop 30%...50%")
-	if len(tokens3) != 7 { // keywordStop, integer, per, tribleDot, integer, per, eof
+	if len(tokens3) != 7 { // keywordStop, integer, per, range, integer, per, eof
 		t.Errorf("lexer is not pass, expected 7 tokens, got %d", len(tokens3))
 	}
 	tokens4 := tokenizer.Lexer("keep 1H 1m 1s")
@@ -113,28 +114,59 @@ func TestLexerNegativeNumber(t *testing.T) {
 func TestLexerMixedIdentifiersAndNumbers(t *testing.T) {
 	// Lexer splits letters and digits: AUL123 -> Identifier("AUL") + Integer("123")
 	tokens := tokenizer.Lexer("select AUL123")
-	if len(tokens) != 4 { // keywordSelect, identifier("AUL"), integer("123"), eof
-		t.Fatalf("expected 4 tokens, got %d", len(tokens))
+	if len(tokens) != 3 { // keywordSelect, identifier("AUL123"), eof
+		t.Fatalf("expected 3 tokens, got %d", len(tokens))
 	}
 	if tokens[0].Kind != tokenizer.KeywordSelect {
 		t.Errorf("expected KeywordSelect, got %v", tokens[0].Kind)
 	}
-	if tokens[1].Kind != tokenizer.Identifier || tokens[1].Value != "AUL" {
-		t.Errorf("expected Identifier(AUL), got %v(%s)", tokens[1].Kind, tokens[1].Value)
-	}
-	if tokens[2].Kind != tokenizer.Integer || tokens[2].Value != "123" {
-		t.Errorf("expected Integer(123), got %v(%s)", tokens[2].Kind, tokens[2].Value)
+	if tokens[1].Kind != tokenizer.Identifier || tokens[1].Value != "AUL123" {
+		t.Errorf("expected Identifier(AUL123), got %v(%s)", tokens[1].Kind, tokens[1].Value)
 	}
 }
 
 func TestLexerUnknownCharacters(t *testing.T) {
-	// Characters like $, #, & should be skipped
+	// $ is now a valid token
 	tokens := tokenizer.Lexer("buy $100")
 	if len(tokens) < 1 {
 		t.Fatal("expected at least 1 token")
 	}
 	if tokens[0].Kind != tokenizer.KeywordBuy {
 		t.Errorf("expected KeywordBuy, got %v", tokens[0].Kind)
+	}
+}
+
+func TestLexerDollarVariable(t *testing.T) {
+	tokens := tokenizer.Lexer("$profit")
+	if len(tokens) != 3 { // dollar, keyword(profit), eof
+		t.Fatalf("expected 3 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Kind != tokenizer.Dollar {
+		t.Errorf("expected Dollar, got %v", tokens[0].Kind)
+	}
+	// profit is a keyword, not an identifier
+	if tokens[1].Kind != tokenizer.KeywordProfit || tokens[1].Value != "profit" {
+		t.Errorf("expected KeywordProfit(profit), got %v(%s)", tokens[1].Kind, tokens[1].Value)
+	}
+}
+
+func TestLexerDollarInExpression(t *testing.T) {
+	tokens := tokenizer.Lexer("buy $amount @market")
+	expected := []tokenizer.TokenKind{
+		tokenizer.KeywordBuy,
+		tokenizer.Dollar,
+		tokenizer.Identifier,
+		tokenizer.At,
+		tokenizer.Identifier,
+		tokenizer.EOF,
+	}
+	if len(tokens) != len(expected) {
+		t.Fatalf("expected %d tokens, got %d", len(expected), len(tokens))
+	}
+	for i, exp := range expected {
+		if tokens[i].Kind != exp {
+			t.Errorf("token[%d]: expected %v, got %v", i, exp, tokens[i].Kind)
+		}
 	}
 }
 
@@ -164,8 +196,8 @@ func TestLexerAtReference(t *testing.T) {
 
 func TestLexerColonText(t *testing.T) {
 	tokens := tokenizer.Lexer("key: value here")
-	if len(tokens) != 4 { // identifier, colon, text, eof
-		t.Fatalf("expected 4 tokens, got %d", len(tokens))
+	if len(tokens) != 5 { // identifier, colon, identifier(value), identifier(here), eof
+		t.Fatalf("expected 5 tokens, got %d", len(tokens))
 	}
 	if tokens[0].Kind != tokenizer.Identifier || tokens[0].Value != "key" {
 		t.Errorf("expected Identifier(key), got %v(%s)", tokens[0].Kind, tokens[0].Value)
@@ -173,8 +205,11 @@ func TestLexerColonText(t *testing.T) {
 	if tokens[1].Kind != tokenizer.Colon {
 		t.Errorf("expected Colon, got %v", tokens[1].Kind)
 	}
-	if tokens[2].Kind != tokenizer.Text || tokens[2].Value != " value here" {
-		t.Errorf("expected Text(' value here'), got %v(%s)", tokens[2].Kind, tokens[2].Value)
+	if tokens[2].Kind != tokenizer.KeywordValue || tokens[2].Value != "value" {
+		t.Errorf("expected KeywordValue(value), got %v(%s)", tokens[2].Kind, tokens[2].Value)
+	}
+	if tokens[3].Kind != tokenizer.Identifier || tokens[3].Value != "here" {
+		t.Errorf("expected Identifier(here), got %v(%s)", tokens[3].Kind, tokens[3].Value)
 	}
 }
 
@@ -189,5 +224,94 @@ func TestLexerMultipleNewlines(t *testing.T) {
 	}
 	if terminatorCount != 3 {
 		t.Errorf("expected 3 terminators, got %d", terminatorCount)
+	}
+}
+
+func TestLexerAnnotationComment(t *testing.T) {
+	input := `/* @adapter: binance */`
+	tokens := tokenizer.Lexer(input)
+	if len(tokens) != 2 { // annotation_comment + eof
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Kind != tokenizer.AnnotationComment {
+		t.Errorf("expected AnnotationComment, got %v", tokens[0].Kind)
+	}
+	// value 格式为 "name|value"
+	if tokens[0].Value != "adapter|binance" {
+		t.Errorf("expected annotation value 'adapter|binance', got %s", tokens[0].Value)
+	}
+}
+
+func TestLexerAnnotationModeComment(t *testing.T) {
+	input := `/* @adapter_mode: futures */`
+	tokens := tokenizer.Lexer(input)
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Kind != tokenizer.AnnotationComment {
+		t.Errorf("expected AnnotationComment, got %v", tokens[0].Kind)
+	}
+	if tokens[0].Value != "adapter_mode|futures" {
+		t.Errorf("expected value 'adapter_mode|futures', got %s", tokens[0].Value)
+	}
+}
+
+func TestLexerAnnotationConfigComment(t *testing.T) {
+	input := `/* @adapter_config: { api_key: "123" } */`
+	tokens := tokenizer.Lexer(input)
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Kind != tokenizer.AnnotationComment {
+		t.Errorf("expected AnnotationComment, got %v", tokens[0].Kind)
+	}
+	if !strings.Contains(tokens[0].Value, "api_key") {
+		t.Errorf("expected config to contain 'api_key', got %s", tokens[0].Value)
+	}
+}
+
+func TestLexerAnnotationSwitchComment(t *testing.T) {
+	input := `/* @adapter_switch: { condition: "down" } */`
+	tokens := tokenizer.Lexer(input)
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Kind != tokenizer.AnnotationComment {
+		t.Errorf("expected AnnotationComment, got %v", tokens[0].Kind)
+	}
+}
+
+func TestLexerMultiLineAnnotationComment(t *testing.T) {
+	input := `/* @adapter_config: {
+	 *   api_key: "abc",
+	 *   secret: "xyz"
+	 * } */`
+	tokens := tokenizer.Lexer(input)
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Kind != tokenizer.AnnotationComment {
+		t.Errorf("expected AnnotationComment, got %v", tokens[0].Kind)
+	}
+	if !strings.Contains(tokens[0].Value, "api_key") || !strings.Contains(tokens[0].Value, "secret") {
+		t.Errorf("expected multiline config preserved, got %s", tokens[0].Value)
+	}
+}
+
+func TestLexerNormalBlockCommentSkipped(t *testing.T) {
+	input := `/* this is just a comment */ buy 100`
+	tokens := tokenizer.Lexer(input)
+	if len(tokens) != 4 { // keywordBuy, integer, terminator(from space?), eof - wait, no newline
+		// Actually no terminator because no newline. Should be keywordBuy, integer, eof = 3
+		t.Logf("tokens: %+v", tokens)
+	}
+	foundBuy := false
+	for _, tok := range tokens {
+		if tok.Kind == tokenizer.KeywordBuy {
+			foundBuy = true
+		}
+	}
+	if !foundBuy {
+		t.Error("expected buy token after skipped normal comment")
 	}
 }

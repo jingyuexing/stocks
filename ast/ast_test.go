@@ -32,7 +32,7 @@ func TestNodeTypeString(t *testing.T) {
 		{YearUnit, "YearUnit"},
 		{MonthUnit, "MonthUnit"},
 		{DayUnit, "DayUnit"},
-		{WeekUnit, "unknown"},
+		{WeekUnit, "WeekUnit"},
 		{HourUnit, "HourUnit"},
 		{MinuteUnit, "MinuteUnit"},
 		{SecondUnit, "SecondUnit"},
