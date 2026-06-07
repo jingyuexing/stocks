@@ -34,7 +34,7 @@ func TestScheduler_AddJob_ListJobs_RemoveJob(t *testing.T) {
 		ID:   "test_job",
 		Spec: "*/1 * * * * *", // valid 6-field cron expression with seconds
 		Type: JobTypePriceCheck,
-		Callback: func(ctx *transformer.StockContext, expr ast.ExpressionNode) {
+		Callback: func(ctx *transformer.StockContext, expr any) {
 			// no-op
 		},
 	}
@@ -89,7 +89,7 @@ func TestScheduler_AddJob_AutoID(t *testing.T) {
 	job := Job{
 		Spec: "*/1 * * * * *",
 		Type: JobTypePriceCheck,
-		Callback: func(ctx *transformer.StockContext, expr ast.ExpressionNode) {
+		Callback: func(ctx *transformer.StockContext, expr any) {
 			// no-op
 		},
 	}
@@ -170,12 +170,11 @@ func TestScheduler_ScheduleFromAST(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	root := ast.RootNode{
-		Node: ast.Node{Type: ast.Program},
-		Expression: []ast.ExpressionNode{
-			{Node: ast.Node{Type: ast.KeepExpression}},
-			{Node: ast.Node{Type: ast.StopExpression}},
-			{Node: ast.Node{Type: ast.GridExpression}},
+	root := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.ConfigStmtNode{Key: "keep"},
+			&ast.ConfigStmtNode{Key: "stop"},
+			&ast.StrategyStmtNode{Kind: "grid"},
 		},
 	}
 
@@ -212,10 +211,9 @@ func TestScheduler_ScheduleFromAST_DefaultInterval(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	root := ast.RootNode{
-		Node: ast.Node{Type: ast.Program},
-		Expression: []ast.ExpressionNode{
-			{Node: ast.Node{Type: ast.StopExpression}},
+	root := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.ConfigStmtNode{Key: "stop"},
 		},
 	}
 
@@ -246,9 +244,8 @@ func TestScheduler_ScheduleFromAST_Empty(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	root := ast.RootNode{
-		Node:       ast.Node{Type: ast.Program},
-		Expression: []ast.ExpressionNode{},
+	root := &ast.ProgramNode{
+		Statements: []ast.Stmt{},
 	}
 
 	err := s.ScheduleFromAST(root, "*/1 * * * * *")
@@ -270,23 +267,22 @@ func TestScheduler_ScheduleFromAST_OnlyBuy(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	root := ast.RootNode{
-		Node: ast.Node{Type: ast.Program},
-		Expression: []ast.ExpressionNode{
-			{Node: ast.Node{Type: ast.BuyExpression}},
+	root := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.ActionStmtNode{Action: "buy"},
 		},
 	}
 
 	err := s.ScheduleFromAST(root, "*/1 * * * * *")
 	if err != nil {
-		t.Fatalf("ScheduleFromAST with only BuyExpression should not error: %v", err)
+		t.Fatalf("ScheduleFromAST with only buy action should not error: %v", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
 
 	jobs := s.ListJobs()
 	if len(jobs) != 0 {
-		t.Errorf("expected no jobs for BuyExpression AST, got %v", jobs)
+		t.Errorf("expected no jobs for buy action AST, got %v", jobs)
 	}
 }
 
@@ -296,17 +292,16 @@ func TestScheduler_ScheduleFromAST_MultipleKeep(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	root := ast.RootNode{
-		Node: ast.Node{Type: ast.Program},
-		Expression: []ast.ExpressionNode{
-			{Node: ast.Node{Type: ast.KeepExpression}},
-			{Node: ast.Node{Type: ast.KeepExpression}},
+	root := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.ConfigStmtNode{Key: "keep"},
+			&ast.ConfigStmtNode{Key: "keep"},
 		},
 	}
 
 	err := s.ScheduleFromAST(root, "*/1 * * * * *")
 	if err != nil {
-		t.Fatalf("ScheduleFromAST with multiple KeepExpression should not error: %v", err)
+		t.Fatalf("ScheduleFromAST with multiple keep config should not error: %v", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -330,17 +325,16 @@ func TestScheduler_ScheduleFromAST_MultipleStop(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	root := ast.RootNode{
-		Node: ast.Node{Type: ast.Program},
-		Expression: []ast.ExpressionNode{
-			{Node: ast.Node{Type: ast.StopExpression}},
-			{Node: ast.Node{Type: ast.StopExpression}},
+	root := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.ConfigStmtNode{Key: "stop"},
+			&ast.ConfigStmtNode{Key: "stop"},
 		},
 	}
 
 	err := s.ScheduleFromAST(root, "*/1 * * * * *")
 	if err != nil {
-		t.Fatalf("ScheduleFromAST with multiple StopExpression should not error: %v", err)
+		t.Fatalf("ScheduleFromAST with multiple stop config should not error: %v", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -392,7 +386,7 @@ func TestScheduler_AddJob_NilContext(t *testing.T) {
 		ID:   "nil_ctx_job",
 		Spec: "*/1 * * * * *",
 		Type: JobTypePriceCheck,
-		Callback: func(ctx *transformer.StockContext, expr ast.ExpressionNode) {
+		Callback: func(ctx *transformer.StockContext, expr any) {
 			called = true
 		},
 	}

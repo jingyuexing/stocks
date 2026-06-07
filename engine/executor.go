@@ -11,14 +11,14 @@ import (
 // Executor 策略动作执行器，负责订阅运行时事件并驱动 AST 动作执行
 type Executor struct {
 	ctx        *transformer.StockContext
-	astRoot    ast.RootNode
+	astRoot    *ast.ProgramNode
 	ruleEng    *RuleEngine
 	riskGuard  *RiskGuard
 	adapterMgr *adapter.Manager
 }
 
 // NewExecutor 创建执行器
-func NewExecutor(ctx *transformer.StockContext, astRoot ast.RootNode) *Executor {
+func NewExecutor(ctx *transformer.StockContext, astRoot *ast.ProgramNode) *Executor {
 	return &Executor{
 		ctx:       ctx,
 		astRoot:   astRoot,
@@ -38,16 +38,16 @@ func (ex *Executor) Setup() {
 		return
 	}
 
-	// 网格检查：遍历 AST 中的 LevelBlock，用 RuleEngine 判断范围命中
+	// 网格检查：遍历 AST 中的 level FlowStmt，用 RuleEngine 判断范围命中
 	ex.ctx.Emiter.On("grid_check", ex.onGridCheck)
 
-	// 止损/止盈触发：遍历 Loss / Profit 节点
+	// 止损/止盈触发：遍历 level / trigger FlowStmt 节点
 	ex.ctx.Emiter.On("stop_triggered", ex.onStopTriggered)
 
 	// 持仓超时：执行 keep 相关的默认平仓逻辑
 	ex.ctx.Emiter.On("keep_expired", ex.onKeepExpired)
 
-	// 交易动作事件（用于日志/风控 hook，实际下单在 executeAction 中）
+	// 交易动作事件（用于日志/风控 hook，实际下单在 dispatchAction 中）
 	ex.ctx.Emiter.On("buy", ex.onActionEvent)
 	ex.ctx.Emiter.On("sell", ex.onActionEvent)
 	ex.ctx.Emiter.On("sell_short", ex.onActionEvent)
@@ -56,158 +56,159 @@ func (ex *Executor) Setup() {
 
 // onGridCheck 处理网格定时检查事件
 func (ex *Executor) onGridCheck(args ...any) {
-	profit := ex.ruleEng.calcProfitPercent()
-	for _, expr := range ex.astRoot.Expression {
-		ex.evalGridExpression(expr, profit)
+	profit := ex.calcProfitPercent()
+	if ex.astRoot == nil {
+		return
+	}
+	// 使用 goroutine 避免在 EventEmit 回调中嵌套触发事件导致的死锁
+	go func() {
+		for _, stmt := range ex.astRoot.Statements {
+			ex.evalStmtForGrid(stmt, profit)
+		}
+	}()
+}
+
+// evalStmtForGrid 递归查找 Strategy / Level 节点并评估
+func (ex *Executor) evalStmtForGrid(stmt ast.Stmt, profit float64) {
+	switch s := stmt.(type) {
+	case *ast.StrategyStmtNode:
+		for _, child := range s.Body {
+			ex.evalStmtForGrid(child, profit)
+		}
+	case *ast.FlowStmtNode:
+		if s.Kind == "level" {
+			ex.evalLevelFlow(s, profit)
+		}
 	}
 }
 
-// evalGridExpression 递归求值 Grid / LevelBlock / Loss / Profit
-func (ex *Executor) evalGridExpression(expr ast.ExpressionNode, profit float64) {
-	switch expr.Type {
-	case ast.GridExpression:
-		// LevelBlock：带 Range 的 GridExpression 子节点
-		if expr.Range != nil {
-			hit, err := ex.ruleEng.EvalCondition(expr, profit)
-			if err != nil {
-				fmt.Printf("[executor] grid level eval error: %v\n", err)
-				return
-			}
-			if hit {
-				ex.ExecuteBody(expr.Body)
-			}
+// evalLevelFlow 评估 level 条件并执行 body
+func (ex *Executor) evalLevelFlow(s *ast.FlowStmtNode, profit float64) {
+	if s.Condition == nil {
+		return
+	}
+	var hit bool
+	switch cond := s.Condition.(type) {
+	case *ast.RangeExprNode:
+		hit = ex.ruleEng.EvalRange(cond, profit)
+	case *ast.BinaryExprNode:
+		ok, err := ex.ruleEng.EvalCondition(cond)
+		if err != nil {
+			fmt.Printf("[executor] level condition eval error: %v\n", err)
+			return
+		}
+		hit = ok
+	case *ast.Literal:
+		// 单点阈值：负数表示 loss，正数表示 profit
+		threshold := cond.AsFloat()
+		if threshold < 0 {
+			hit = profit <= threshold
 		} else {
-			// 无 Range 的顶层 grid，递归处理 body
-			ex.ExecuteBody(expr.Body)
+			hit = profit >= threshold
 		}
-	case ast.LongExpression, ast.ShortExpression, ast.BothExpression, ast.PortfolioExpression:
-		ex.ExecuteBody(expr.Body)
-	case ast.LossExpression:
-		// loss 通常由 stop_triggered 处理，但也可在 grid_check 中复合判断
-		hit, err := ex.ruleEng.EvalCondition(expr, profit)
-		if err == nil && hit {
-			ex.ExecuteBody(expr.Body)
-		}
-	case ast.ProfitExpression:
-		hit, err := ex.ruleEng.EvalCondition(expr, profit)
-		if err == nil && hit {
-			ex.ExecuteBody(expr.Body)
-		}
+	}
+	if hit {
+		ex.ExecuteBody(s.Body)
 	}
 }
 
 // onStopTriggered 处理止损/止盈事件
 func (ex *Executor) onStopTriggered(args ...any) {
-	profit := ex.ruleEng.calcProfitPercent()
-	for _, expr := range ex.astRoot.Expression {
-		ex.evalStopExpression(expr, profit)
+	profit := ex.calcProfitPercent()
+	if ex.astRoot == nil {
+		return
 	}
+	// 使用 goroutine 避免在 EventEmit 回调中嵌套触发事件导致的死锁
+	go func() {
+		for _, stmt := range ex.astRoot.Statements {
+			ex.evalStmtForStop(stmt, profit)
+		}
+	}()
 }
 
-// evalStopExpression 递归查找 Loss / Profit / Stop 节点
-func (ex *Executor) evalStopExpression(expr ast.ExpressionNode, profit float64) {
-	switch expr.Type {
-	case ast.GridExpression, ast.LongExpression, ast.ShortExpression, ast.BothExpression, ast.PortfolioExpression:
-		for _, child := range expr.Body {
-			ex.evalStopExpression(child, profit)
+// evalStmtForStop 递归查找 Level / Trigger 节点
+func (ex *Executor) evalStmtForStop(stmt ast.Stmt, profit float64) {
+	switch s := stmt.(type) {
+	case *ast.StrategyStmtNode:
+		for _, child := range s.Body {
+			ex.evalStmtForStop(child, profit)
 		}
-	case ast.LossExpression:
-		hit, err := ex.ruleEng.EvalCondition(expr, profit)
-		if err != nil {
-			fmt.Printf("[executor] loss eval error: %v\n", err)
-			return
+	case *ast.FlowStmtNode:
+		if s.Kind == "level" || s.Kind == "trigger" {
+			ex.evalLevelFlow(s, profit)
 		}
-		if hit {
-			fmt.Printf("[executor] loss condition hit at %.2f%%\n", profit)
-			ex.ExecuteBody(expr.Body)
-		}
-	case ast.ProfitExpression:
-		hit, err := ex.ruleEng.EvalCondition(expr, profit)
-		if err != nil {
-			fmt.Printf("[executor] profit eval error: %v\n", err)
-			return
-		}
-		if hit {
-			fmt.Printf("[executor] profit condition hit at %.2f%%\n", profit)
-			ex.ExecuteBody(expr.Body)
-		}
-	case ast.StopExpression:
-		// stop 表达式本身由 Scheduler 触发 stop_triggered
-		// 若 stop 出现在 body 中，直接执行子动作
-		ex.ExecuteBody(expr.Body)
 	}
 }
 
 // onKeepExpired 处理持仓超时事件
 func (ex *Executor) onKeepExpired(args ...any) {
-	// 默认行为：触发 stop 或平仓（当前仅日志，后续对接 RiskGuard / Adapter）
 	fmt.Println("[executor] keep expired, consider closing position")
 }
 
 // onActionEvent 统一交易动作事件回调
 func (ex *Executor) onActionEvent(args ...any) {
-	// 目前用于日志与风控 hook 预留
-	if len(args) > 0 {
-		if ctx, ok := args[0].(*transformer.StockContext); ok {
-			_ = ctx
-			// TODO: 第四阶段对接 RiskGuard 与 AdapterManager
-		}
+	if len(args) == 0 {
+		return
+	}
+	switch v := args[0].(type) {
+	case *transformer.StockContext:
+		_ = v
+	case *transformer.Event:
+		_ = v
 	}
 }
 
-// ExecuteBody 顺序执行 AST Body 中的表达式
-func (ex *Executor) ExecuteBody(body []ast.ExpressionNode) {
-	for _, expr := range body {
-		ex.executeExpression(expr)
+// ExecuteBody 顺序执行 AST Body 中的语句
+func (ex *Executor) ExecuteBody(body []ast.Stmt) {
+	for _, stmt := range body {
+		ex.executeStmt(stmt)
 	}
 }
 
-// executeExpression 执行单个表达式节点
-func (ex *Executor) executeExpression(expr ast.ExpressionNode) {
-	switch expr.Type {
-	case ast.BuyExpression:
-		act := ex.BuildAction(ActionBuy, expr)
-		ex.dispatchAction(act)
-	case ast.SellExpression:
-		act := ex.BuildAction(ActionSell, expr)
-		ex.dispatchAction(act)
-	case ast.SellShortExpression:
-		act := ex.BuildAction(ActionSellShort, expr)
-		ex.dispatchAction(act)
-	case ast.BuyCoverExpression:
-		act := ex.BuildAction(ActionBuyCover, expr)
-		ex.dispatchAction(act)
-	case ast.GridExpression, ast.LossExpression, ast.ProfitExpression:
-		// 嵌套块级表达式，递归执行
-		ex.ExecuteBody(expr.Body)
-	case ast.ConditionalExpression:
-		// 条件编译/运行时条件判断
-		if len(expr.Body) > 0 {
-			cond := expr.Body[0]
-			ok, err := ex.ruleEng.EvalCondition(cond, 0)
-			if err == nil && ok {
-				ex.ExecuteBody(expr.Body[1:])
-			}
-		}
-	case ast.StopExpression:
-		ex.ExecuteBody(expr.Body)
-	default:
-		// 全局配置、注释等无需执行
+// executeStmt 执行单个语句节点
+func (ex *Executor) executeStmt(stmt ast.Stmt) {
+	switch s := stmt.(type) {
+	case *ast.ActionStmtNode:
+		ex.executeAction(s)
+	case *ast.FlowStmtNode:
+		// 嵌套 flow，按当前 profit 评估
+		ex.evalLevelFlow(s, ex.calcProfitPercent())
+	case *ast.StrategyStmtNode:
+		ex.ExecuteBody(s.Body)
 	}
 }
 
-// BuildAction 从 AST 动作表达式构造标准化 Action
-func (ex *Executor) BuildAction(typ ActionType, expr ast.ExpressionNode) Action {
+// executeAction 执行单个动作
+func (ex *Executor) executeAction(s *ast.ActionStmtNode) {
+	switch s.Action {
+	case "buy":
+		act := ex.BuildAction(ActionBuy, s)
+		ex.dispatchAction(act)
+	case "sell":
+		act := ex.BuildAction(ActionSell, s)
+		ex.dispatchAction(act)
+	case "sell_short":
+		act := ex.BuildAction(ActionSellShort, s)
+		ex.dispatchAction(act)
+	case "buy_cover":
+		act := ex.BuildAction(ActionBuyCover, s)
+		ex.dispatchAction(act)
+	}
+}
+
+// BuildAction 从 AST 动作语句构造标准化 Action
+func (ex *Executor) BuildAction(typ ActionType, s *ast.ActionStmtNode) Action {
 	act := Action{
 		Type:   typ,
-		Symbol: ex.ctx.Code,
-		Source: expr.Type.String(),
+		Symbol: ex.ctx.GetCode(),
+		Source: s.Action,
 	}
-	if len(expr.Params) > 0 {
-		p := expr.Params[0]
-		act.Amount = p.AsFloat()
-		if p.Node.Type == ast.PercentLiteral || p.Unit == "%" {
-			act.IsPercent = true
+	if len(s.Args) > 0 {
+		if lit, ok := s.Args[0].(*ast.Literal); ok {
+			act.Amount = lit.AsFloat()
+			if lit.Unit == "%" {
+				act.IsPercent = true
+			}
 		}
 	}
 	return act
@@ -292,4 +293,14 @@ func (ex *Executor) sendToGateway(act Action) {
 	} else {
 		fmt.Printf("[executor] gateway order placed: %s\n", orderID)
 	}
+}
+
+// calcProfitPercent 计算当前盈亏百分比
+func (ex *Executor) calcProfitPercent() float64 {
+	begin := ex.ctx.GetBeginPrice()
+	current := ex.ctx.GetCurrentPrice()
+	if begin <= 0 || current <= 0 {
+		return 0
+	}
+	return (current - begin) / begin * 100
 }

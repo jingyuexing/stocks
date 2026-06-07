@@ -104,8 +104,8 @@ func TestEngine_CompileAndLoad(t *testing.T) {
 	if e.State() != engine.StateLoaded {
 		t.Errorf("expected state loaded, got %s", e.State())
 	}
-	if e.Context().Code != "TSLA" {
-		t.Errorf("expected code TSLA, got %s", e.Context().Code)
+	if e.Context().GetCode() != "TSLA" {
+		t.Errorf("expected code TSLA, got %s", e.Context().GetCode())
 	}
 }
 

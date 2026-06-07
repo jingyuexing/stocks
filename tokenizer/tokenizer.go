@@ -206,6 +206,20 @@ func (t TokenKind) Numberic() uint {
 		return 0x64
 	case Dollar:
 		return 0x65
+	case KeywordOnce:
+		return 0x66
+	case KeywordTwice:
+		return 0x67
+	case KeywordDaily:
+		return 0x68
+	case KeywordWeekly:
+		return 0x69
+	case KeywordMonthly:
+		return 0x6a
+	case KeywordYearly:
+		return 0x6b
+	case KeywordHourly:
+		return 0x6c
 	default:
 		return 0
 	}
@@ -214,7 +228,7 @@ func (t TokenKind) Numberic() uint {
 func (t TokenKind) IsKeyword() bool {
 	switch t {
 	case KeywordBuy, KeywordSell, KeywordStop, KeywordKeep,
-		KeywordSelect, KeywordValue, KeywordGrid, KeywordLoss, KeywordProfit,
+		KeywordSelect, KeywordValue, KeywordGrid, KeywordLoss, KeywordProfit, KeywordPrice,
 		KeywordLong, KeywordShort, KeywordBoth, KeywordPortfolio,
 		KeywordTemplate, KeywordUse, KeywordExtends, KeywordAs, KeywordImport, KeywordExport, KeywordMacro,
 		KeywordCross, KeywordOverride, KeywordPriority,
@@ -227,7 +241,14 @@ func (t TokenKind) IsKeyword() bool {
 		KeywordMaxPosition, KeywordStopLoss, KeywordSlippageTolerance, KeywordPartialFill, KeywordCircuitBreaker,
 		KeywordCompoundProfit, KeywordSkipIfGapped, KeywordFallback,
 		KeywordParam, KeywordIf, KeywordAssert,
-		KeywordTrue, KeywordFalse:
+		KeywordArbitrage, KeywordTrigger, KeywordUntil,
+		KeywordLeg, KeywordSide, KeywordAuto, KeywordRatio, KeywordTimeout, KeywordSlippage,
+		KeywordFillMode, KeywordIoc, KeywordFok, KeywordGtd, KeywordPostOnly, KeywordBps,
+		KeywordAtomic, KeywordRollback, KeywordBestEffort, KeywordTif, KeywordRemaining,
+		KeywordSpot, KeywordFutures, KeywordPerp, KeywordBetween, KeywordOn, KeywordTag,
+		KeywordSpread, KeywordBasis, KeywordFunding, KeywordLatency, KeywordDepth,
+		KeywordTrue, KeywordFalse,
+		KeywordOnce, KeywordTwice, KeywordDaily, KeywordWeekly, KeywordMonthly, KeywordYearly, KeywordHourly:
 		return true
 	default:
 		return false
@@ -255,6 +276,7 @@ const (
 	At            TokenKind = "at"
 	TribleDot     TokenKind = "Tribledot"
 	Time          TokenKind = "Time"
+	Date          TokenKind = "Date"
 	LeftBraces    TokenKind = "LeftBraces"
 	RightBraces   TokenKind = "RightBraces"
 	Plus          TokenKind = "Plus"
@@ -331,6 +353,56 @@ const (
 	KeywordParam  TokenKind = "param"
 	KeywordIf     TokenKind = "if"
 	KeywordAssert TokenKind = "assert"
+
+	// v2.2 高频交易
+	KeywordArbitrage TokenKind = "arbitrage"
+	// 事件触发器
+	KeywordTrigger TokenKind = "trigger"
+	KeywordUntil   TokenKind = "until"
+
+	// grid 修饰符
+	KeywordPrice TokenKind = "price"
+
+	// arbitrage / leg
+	KeywordLeg        TokenKind = "leg"
+	KeywordSide       TokenKind = "side"
+	KeywordAuto       TokenKind = "auto"
+	KeywordRatio      TokenKind = "ratio"
+	KeywordTimeout    TokenKind = "timeout"
+	KeywordSlippage   TokenKind = "slippage"
+	KeywordFillMode   TokenKind = "fill_mode"
+	KeywordIoc        TokenKind = "ioc"
+	KeywordFok        TokenKind = "fok"
+	KeywordGtd        TokenKind = "gtd"
+	KeywordPostOnly   TokenKind = "post_only"
+	KeywordBps        TokenKind = "bps"
+	KeywordAtomic     TokenKind = "atomic"
+	KeywordRollback   TokenKind = "rollback"
+	KeywordBestEffort TokenKind = "best_effort"
+	KeywordTif        TokenKind = "tif"
+	KeywordRemaining  TokenKind = "remaining"
+	KeywordSpot       TokenKind = "spot"
+	KeywordFutures    TokenKind = "futures"
+	KeywordPerp       TokenKind = "perp"
+	KeywordBetween    TokenKind = "between"
+	KeywordOn         TokenKind = "on"
+	KeywordTag        TokenKind = "tag"
+
+	// trigger 条件关键字
+	KeywordSpread  TokenKind = "spread"
+	KeywordBasis   TokenKind = "basis"
+	KeywordFunding TokenKind = "funding"
+	KeywordLatency TokenKind = "latency"
+	KeywordDepth   TokenKind = "depth"
+
+	// trigger 频次修饰关键字
+	KeywordOnce    TokenKind = "once"
+	KeywordTwice   TokenKind = "twice"
+	KeywordDaily   TokenKind = "daily"
+	KeywordWeekly  TokenKind = "weekly"
+	KeywordMonthly TokenKind = "monthly"
+	KeywordYearly  TokenKind = "yearly"
+	KeywordHourly  TokenKind = "hourly"
 
 	// v2.1 字面量
 	KeywordTrue  TokenKind = "true"
@@ -502,8 +574,86 @@ func createIdentifier(val string) Token {
 		token = createToken(KeywordParam, val)
 	case "if":
 		token = createToken(KeywordIf, val)
+	case "trigger":
+		token = createToken(KeywordTrigger, val)
+	case "until":
+		token = createToken(KeywordUntil, val)
+	case "arbitrage":
+		token = createToken(KeywordArbitrage, val)
 	case "assert":
 		token = createToken(KeywordAssert, val)
+	case "price":
+		token = createToken(KeywordPrice, val)
+	case "leg":
+		token = createToken(KeywordLeg, val)
+	case "side":
+		token = createToken(KeywordSide, val)
+	case "auto":
+		token = createToken(KeywordAuto, val)
+	case "ratio":
+		token = createToken(KeywordRatio, val)
+	case "timeout":
+		token = createToken(KeywordTimeout, val)
+	case "slippage":
+		token = createToken(KeywordSlippage, val)
+	case "fill_mode":
+		token = createToken(KeywordFillMode, val)
+	case "ioc":
+		token = createToken(KeywordIoc, val)
+	case "fok":
+		token = createToken(KeywordFok, val)
+	case "gtd":
+		token = createToken(KeywordGtd, val)
+	case "post_only":
+		token = createToken(KeywordPostOnly, val)
+	case "bps":
+		token = createToken(KeywordBps, val)
+	case "atomic":
+		token = createToken(KeywordAtomic, val)
+	case "rollback":
+		token = createToken(KeywordRollback, val)
+	case "best_effort":
+		token = createToken(KeywordBestEffort, val)
+	case "tif":
+		token = createToken(KeywordTif, val)
+	case "remaining":
+		token = createToken(KeywordRemaining, val)
+	case "spot":
+		token = createToken(KeywordSpot, val)
+	case "futures":
+		token = createToken(KeywordFutures, val)
+	case "perp":
+		token = createToken(KeywordPerp, val)
+	case "between":
+		token = createToken(KeywordBetween, val)
+	case "on":
+		token = createToken(KeywordOn, val)
+	case "tag":
+		token = createToken(KeywordTag, val)
+	case "spread":
+		token = createToken(KeywordSpread, val)
+	case "basis":
+		token = createToken(KeywordBasis, val)
+	case "funding":
+		token = createToken(KeywordFunding, val)
+	case "latency":
+		token = createToken(KeywordLatency, val)
+	case "depth":
+		token = createToken(KeywordDepth, val)
+	case "once":
+		token = createToken(KeywordOnce, val)
+	case "twice":
+		token = createToken(KeywordTwice, val)
+	case "daily":
+		token = createToken(KeywordDaily, val)
+	case "weekly":
+		token = createToken(KeywordWeekly, val)
+	case "monthly":
+		token = createToken(KeywordMonthly, val)
+	case "yearly":
+		token = createToken(KeywordYearly, val)
+	case "hourly":
+		token = createToken(KeywordHourly, val)
 	case "true":
 		token = createToken(KeywordTrue, val)
 	case "false":
@@ -527,8 +677,8 @@ func TokenIsNumber(token Token) bool {
 func IsTimeUnit(val string) bool {
 	if val != "" {
 		switch val {
-		case "Y", "M", "W", "d", "h", "H", "m", "min", "s", "ms":
-			// 年 月 周 天 时 分 秒 毫秒
+		case "Y", "M", "W", "d", "h", "H", "m", "min", "s", "ms", "us", "μs", "ns":
+			// 年 月 周 天 时 分 秒 毫秒 微秒 纳秒
 			return true
 		default:
 			return false
@@ -557,7 +707,7 @@ func IsTimeUnitToken(token Token) bool {
 
 func IsLiteral(val Token) bool {
 	switch val.Kind {
-	case Float, Integer, Text, String:
+	case Float, Integer, Text, String, Time, Date:
 		return true
 	default:
 		return false

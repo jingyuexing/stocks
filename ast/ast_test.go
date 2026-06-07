@@ -9,36 +9,33 @@ func TestNodeTypeString(t *testing.T) {
 		nt       NodeType
 		expected string
 	}{
-		{Program, "unknown"},
-		{FloatLiteral, "FloatLiteral"},
-		{IntegerLiteral, "IntegerLiteral"},
-		{TextLiteral, "TextLiteral"},
-		{DurationLiteral, "DurationLiteral"},
-		{PercentLiteral, "unknown"},
-		{ReferenceLiteral, "unknown"},
-		{LiteralExpression, "LiteralExpression"},
-		{BuyExpression, "BuyExpression"},
-		{SellExpression, "SellExpression"},
-		{KeepExpression, "KeepExpression"},
-		{StopExpression, "StopExpression"},
-		{RangeExpression, "RangeExpression"},
-		{DefineStatement, "DefineStatement"},
-		{ReferenceStatement, "ReferenceStatement"},
-		{SelectExpression, "SelectExpression"},
-		{GridExpression, "GridExpression"},
-		{LossExpression, "LossExpression"},
-		{ProfitExpression, "ProfitExpression"},
-		{ValueStatement, "ValueStatement"},
-		{YearUnit, "YearUnit"},
-		{MonthUnit, "MonthUnit"},
-		{DayUnit, "DayUnit"},
-		{WeekUnit, "WeekUnit"},
-		{HourUnit, "HourUnit"},
-		{MinuteUnit, "MinuteUnit"},
-		{SecondUnit, "SecondUnit"},
-		{MillisecondUnit, "MillisecondUnit"},
-		{Unknown, "unknown"},
-		{NodeType(9999), "unknown"},
+		{Program, "Program"},
+		{StrategyStmt, "StrategyStmt"},
+		{BlockStmt, "BlockStmt"},
+		{FlowStmt, "FlowStmt"},
+		{ActionStmt, "ActionStmt"},
+		{ConfigStmt, "ConfigStmt"},
+		{ImportStmt, "ImportStmt"},
+		{ExportStmt, "ExportStmt"},
+		{UseStmt, "UseStmt"},
+		{TemplateStmt, "TemplateStmt"},
+		{MacroStmt, "MacroStmt"},
+		{IfStmt, "IfStmt"},
+		{AssertStmt, "AssertStmt"},
+		{AnnotationStmt, "AnnotationStmt"},
+		{DefineStmt, "DefineStmt"},
+		{SelectStmt, "SelectStmt"},
+		{LiteralExpr, "LiteralExpr"},
+		{BinaryExpr, "BinaryExpr"},
+		{UnaryExpr, "UnaryExpr"},
+		{RangeExpr, "RangeExpr"},
+		{VariableExpr, "VariableExpr"},
+		{ReferenceExpr, "ReferenceExpr"},
+		{MacroExpandExpr, "MacroExpandExpr"},
+		{CallExpr, "CallExpr"},
+		{IdentifierExpr, "IdentifierExpr"},
+		{Unknown, "Unknown"},
+		{NodeType(9999), "Unknown"},
 	}
 
 	for _, tc := range tests {
@@ -57,28 +54,23 @@ func TestLiteralString(t *testing.T) {
 	}{
 		{
 			name:     "float without unit",
-			literal:  Literal{Node: Node{Type: FloatLiteral}, Value: "3.14"},
+			literal:  Literal{Value: "3.14"},
 			expected: "3.14",
 		},
 		{
 			name:     "float percent",
-			literal:  Literal{Node: Node{Type: FloatLiteral}, Value: "12.5", Unit: "%"},
+			literal:  Literal{Value: "12.5", Unit: "%"},
 			expected: "0.125000",
 		},
 		{
 			name:     "integer",
-			literal:  Literal{Node: Node{Type: IntegerLiteral}, Value: "42"},
+			literal:  Literal{Value: "42"},
 			expected: "42",
 		},
 		{
-			name:     "text returns empty",
-			literal:  Literal{Node: Node{Type: TextLiteral}, Value: "hello"},
-			expected: "",
-		},
-		{
-			name:     "default returns empty",
-			literal:  Literal{Node: Node{Type: Unknown}, Value: "x"},
-			expected: "",
+			name:     "text",
+			literal:  Literal{Value: "hello"},
+			expected: "hello",
 		},
 	}
 
@@ -116,32 +108,103 @@ func TestLiteralAsInt(t *testing.T) {
 	}
 }
 
-func TestExpressionNodeBody(t *testing.T) {
-	expr := ExpressionNode{
-		Node: Node{Type: GridExpression},
-		Body: []ExpressionNode{
-			{Node: Node{Type: LossExpression}},
-			{Node: Node{Type: ProfitExpression}},
-		},
+func TestLiteralAsBool(t *testing.T) {
+	l := Literal{Value: "true"}
+	if !l.AsBool() {
+		t.Error("AsBool() = false, want true")
 	}
-	if len(expr.Body) != 2 {
-		t.Fatalf("expected 2 body items, got %d", len(expr.Body))
-	}
-	if expr.Body[0].Type != LossExpression {
-		t.Error("expected LossExpression in body[0]")
-	}
-	if expr.Body[1].Type != ProfitExpression {
-		t.Error("expected ProfitExpression in body[1]")
+	l2 := Literal{Value: "false"}
+	if l2.AsBool() {
+		t.Error("AsBool() = true, want false")
 	}
 }
 
-func TestRangeExpressionNode(t *testing.T) {
-	node := RangeExpressionNode{
-		Node:  Node{Type: RangeExpression},
-		Begin: Literal{Value: "10", Unit: "%"},
-		End:   Literal{Value: "20", Unit: "%"},
+func TestProgramNode(t *testing.T) {
+	prog := ProgramNode{
+		Statements: []Stmt{
+			&StrategyStmtNode{Kind: "grid"},
+			&ActionStmtNode{Action: "buy"},
+		},
+	}
+	if len(prog.Statements) != 2 {
+		t.Fatalf("expected 2 statements, got %d", len(prog.Statements))
+	}
+	if s, ok := prog.Statements[0].(*StrategyStmtNode); !ok || s.Kind != "grid" {
+		t.Error("expected StrategyStmtNode with kind grid")
+	}
+	if a, ok := prog.Statements[1].(*ActionStmtNode); !ok || a.Action != "buy" {
+		t.Error("expected ActionStmtNode with action buy")
+	}
+}
+
+func TestRangeExprNode(t *testing.T) {
+	node := RangeExprNode{
+		Begin: &Literal{Value: "10", Unit: "%"},
+		End:   &Literal{Value: "20", Unit: "%"},
 	}
 	if node.Begin.Value != "10" || node.End.Value != "20" {
-		t.Error("RangeExpressionNode values mismatch")
+		t.Error("RangeExprNode values mismatch")
+	}
+}
+
+func TestStrategyStmtNode(t *testing.T) {
+	stmt := StrategyStmtNode{
+		Kind:   "grid",
+		Target: "AAPL",
+		Body: []Stmt{
+			&ActionStmtNode{Action: "buy"},
+		},
+	}
+	if stmt.Kind != "grid" {
+		t.Errorf("expected kind grid, got %s", stmt.Kind)
+	}
+	if stmt.Target != "AAPL" {
+		t.Errorf("expected target AAPL, got %s", stmt.Target)
+	}
+	if len(stmt.Body) != 1 {
+		t.Errorf("expected 1 body stmt, got %d", len(stmt.Body))
+	}
+}
+
+func TestFlowStmtNode(t *testing.T) {
+	stmt := FlowStmtNode{
+		Kind:      "level",
+		Condition: &RangeExprNode{Begin: &Literal{Value: "-10"}, End: &Literal{Value: "-5"}},
+		Body: []Stmt{
+			&ActionStmtNode{Action: "sell"},
+		},
+	}
+	if stmt.Kind != "level" {
+		t.Errorf("expected kind level, got %s", stmt.Kind)
+	}
+	if len(stmt.Body) != 1 {
+		t.Errorf("expected 1 body stmt, got %d", len(stmt.Body))
+	}
+}
+
+func TestBinaryExprNode(t *testing.T) {
+	expr := BinaryExprNode{
+		Op:    ">",
+		Left:  &VariableExprNode{Name: "price"},
+		Right: &Literal{Value: "100"},
+	}
+	if expr.Op != ">" {
+		t.Errorf("expected op >, got %s", expr.Op)
+	}
+	if _, ok := expr.Left.(*VariableExprNode); !ok {
+		t.Error("expected left to be VariableExprNode")
+	}
+	if _, ok := expr.Right.(*Literal); !ok {
+		t.Error("expected right to be Literal")
+	}
+}
+
+func TestUnaryExprNode(t *testing.T) {
+	expr := UnaryExprNode{
+		Op:   "-",
+		Expr: &Literal{Value: "10"},
+	}
+	if expr.Op != "-" {
+		t.Errorf("expected op -, got %s", expr.Op)
 	}
 }

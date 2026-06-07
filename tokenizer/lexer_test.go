@@ -74,27 +74,36 @@ func TestLexerSpecialCharacters(t *testing.T) {
 }
 
 func TestLexerMultipleDots(t *testing.T) {
-	// "1...2" has 3 dots in the numeric scanner, so becomes a Text token
+	// "1...2" should be split into integer + range + integer
 	tokens := tokenizer.Lexer("1...2")
-	if len(tokens) != 2 { // text + eof
-		t.Fatalf("expected 2 tokens (text + eof), got %d", len(tokens))
+	if len(tokens) != 4 { // integer + range + integer + eof
+		t.Fatalf("expected 4 tokens (integer + range + integer + eof), got %d", len(tokens))
 	}
-	if tokens[0].Kind != tokenizer.Text {
-		t.Errorf("expected Text for 1...2, got %v", tokens[0].Kind)
+	if tokens[0].Kind != tokenizer.Integer || tokens[0].Value != "1" {
+		t.Errorf("expected Integer(1), got %v(%s)", tokens[0].Kind, tokens[0].Value)
+	}
+	if tokens[1].Kind != tokenizer.Range || tokens[1].Value != "..." {
+		t.Errorf("expected Range(...), got %v(%s)", tokens[1].Kind, tokens[1].Value)
+	}
+	if tokens[2].Kind != tokenizer.Integer || tokens[2].Value != "2" {
+		t.Errorf("expected Integer(2), got %v(%s)", tokens[2].Kind, tokens[2].Value)
 	}
 }
 
 func TestLexerMultipleDecimalPoints(t *testing.T) {
-	// "1.2.3" has two dots so becomes Text
+	// "1.2.3" should be split into float + dot + integer
 	tokens := tokenizer.Lexer("1.2.3")
-	foundText := false
-	for _, tok := range tokens {
-		if tok.Kind == tokenizer.Text {
-			foundText = true
-		}
+	if len(tokens) != 4 { // float + dot + integer + eof
+		t.Fatalf("expected 4 tokens (float + dot + integer + eof), got %d", len(tokens))
 	}
-	if !foundText {
-		t.Error("expected a Text token for 1.2.3")
+	if tokens[0].Kind != tokenizer.Float || tokens[0].Value != "1.2" {
+		t.Errorf("expected Float(1.2), got %v(%s)", tokens[0].Kind, tokens[0].Value)
+	}
+	if tokens[1].Kind != tokenizer.Dot || tokens[1].Value != "." {
+		t.Errorf("expected Dot(.), got %v(%s)", tokens[1].Kind, tokens[1].Value)
+	}
+	if tokens[2].Kind != tokenizer.Integer || tokens[2].Value != "3" {
+		t.Errorf("expected Integer(3), got %v(%s)", tokens[2].Kind, tokens[2].Value)
 	}
 }
 

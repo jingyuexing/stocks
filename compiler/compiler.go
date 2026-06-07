@@ -8,7 +8,6 @@ import (
 	"github.com/jingyuexing/stocks/ast"
 	"github.com/jingyuexing/stocks/parser"
 	"github.com/jingyuexing/stocks/tokenizer"
-	"github.com/jingyuexing/stocks/transformer"
 )
 
 // CompileError 编译错误
@@ -22,7 +21,7 @@ func (e CompileError) Error() string {
 }
 
 // Compile 将 DSL 源码编译为 StrategyBundle
-// 完整的编译链路：Tokenizer -> Parser -> Transformer -> BundleAssembler
+// 完整的编译链路：Tokenizer -> Parser -> Builder -> BundleAssembler
 func Compile(source string) (*StrategyBundle, error) {
 	bundle := NewBundle()
 	bundle.Source = source
@@ -31,13 +30,13 @@ func Compile(source string) (*StrategyBundle, error) {
 	tokens := tokenizer.Lexer(source)
 
 	// 2. Parser
-	root := parser.Parser(tokens)
-	bundle.AST = root
+	root := parser.Parse(tokens)
+	bundle.AST = *root
 
-	// 3. Transformer：AST -> StockContext
-	ctx := transformer.Transformer(root)
+	// 3. Builder：AST -> StockContext
+	ctx := BuildContext(root)
 	if ctx == nil {
-		return nil, CompileError{Phase: "transformer", Message: "failed to create StockContext from AST"}
+		return nil, CompileError{Phase: "builder", Message: "failed to create StockContext from AST"}
 	}
 	bundle.Context = ctx
 
@@ -66,22 +65,23 @@ func CompileWithID(id string, source string) (*StrategyBundle, error) {
 	return bundle, nil
 }
 
-// extractAdapterConfig 从 AST 的 AnnotationExpression 中提取适配器配置
-func extractAdapterConfig(root ast.RootNode) AdapterConfig {
+// extractAdapterConfig 从 AST 的 AnnotationStmt 中提取适配器配置
+func extractAdapterConfig(root *ast.ProgramNode) AdapterConfig {
 	var cfg AdapterConfig
-	for _, expr := range root.Expression {
-		if expr.Type != ast.AnnotationExpression {
+	for _, stmt := range root.Statements {
+		ann, ok := stmt.(*ast.AnnotationStmtNode)
+		if !ok {
 			continue
 		}
-		switch expr.Name {
+		switch ann.Key {
 		case "adapter":
-			parseAdapterSpec(expr.Value.Value, &cfg)
+			parseAdapterSpec(ann.Value, &cfg)
 		case "adapter_mode":
-			cfg.Mode = strings.TrimSpace(expr.Value.Value)
+			cfg.Mode = strings.TrimSpace(ann.Value)
 		case "adapter_config":
-			cfg.Params = expr.Value.Value
+			cfg.Params = ann.Value
 		case "adapter_switch":
-			cfg.Switch = expr.Value.Value
+			cfg.Switch = ann.Value
 		}
 	}
 	return cfg

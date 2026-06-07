@@ -6,6 +6,7 @@ import (
 
 	"github.com/jingyuexing/stocks/adapter"
 	"github.com/jingyuexing/stocks/compiler"
+	"github.com/jingyuexing/stocks/gateway"
 	"github.com/jingyuexing/stocks/scheduler"
 	"github.com/jingyuexing/stocks/transformer"
 )
@@ -113,12 +114,18 @@ func (e *Engine) startLocked() error {
 	e.scheduler.Start()
 
 	// 根据 AST 注册默认定时任务
-	if err := e.scheduler.ScheduleFromAST(e.bundle.AST, e.opts.PriceCheckInterval); err != nil {
+	if err := e.scheduler.ScheduleFromAST(&e.bundle.AST, e.opts.PriceCheckInterval); err != nil {
 		return fmt.Errorf("schedule from AST failed: %w", err)
 	}
 
+	// 若已加载网关，注入行情数据提供者到 Context
+	if e.adapterMgr != nil && e.adapterMgr.IsLoaded() {
+		e.bundle.Context.Vars.Provider = &gatewayProvider{gw: e.adapterMgr.Primary()}
+		e.bundle.Context.Vars.Symbol = e.bundle.Context.GetCode()
+	}
+
 	// 初始化 Executor 并订阅事件
-	e.executor = NewExecutor(e.bundle.Context, e.bundle.AST)
+	e.executor = NewExecutor(e.bundle.Context, &e.bundle.AST)
 	if e.adapterMgr != nil {
 		e.executor.SetAdapterManager(e.adapterMgr)
 	}
@@ -128,8 +135,6 @@ func (e *Engine) startLocked() error {
 	if e.adapterMgr != nil && e.adapterMgr.IsLoaded() {
 		_ = e.adapterMgr.Primary().OnEngineStart()
 	}
-
-	// TODO: 第四阶段 初始化 AdapterManager 并加载 TradingGateway
 
 	e.state = StateRunning
 	return nil
@@ -238,4 +243,46 @@ func (e *Engine) AdapterManager() *adapter.Manager {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.adapterMgr
+}
+
+// ---------- gateway -> MarketDataProvider 适配 ----------
+
+type gatewayProvider struct {
+	gw gateway.TradingGateway
+}
+
+func (p *gatewayProvider) GetPrice(symbol string) float64 {
+	if p.gw == nil {
+		return 0
+	}
+	price, err := p.gw.GetMarketPrice(symbol)
+	if err != nil {
+		return 0
+	}
+	return price
+}
+
+func (p *gatewayProvider) GetVolume(symbol string) float64 {
+	// TODO: gateway 接口扩展 GetVolume 后接入
+	return 0
+}
+
+func (p *gatewayProvider) GetHigh(symbol string) float64 {
+	// TODO: gateway 接口扩展 GetHigh 后接入
+	return 0
+}
+
+func (p *gatewayProvider) GetLow(symbol string) float64 {
+	// TODO: gateway 接口扩展 GetLow 后接入
+	return 0
+}
+
+func (p *gatewayProvider) GetOpen(symbol string) float64 {
+	// TODO: gateway 接口扩展 GetVolume 后接入
+	return 0
+}
+
+func (p *gatewayProvider) GetClose(symbol string) float64 {
+	// TODO: gateway 接口扩展 GetVolume 后接入
+	return 0
 }

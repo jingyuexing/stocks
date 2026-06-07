@@ -26,10 +26,10 @@ grid AAPL {
 	if bundle.Context == nil {
 		t.Fatal("expected non-nil context")
 	}
-	if bundle.Context.Code != "AAPL" {
-		t.Errorf("expected code AAPL, got %s", bundle.Context.Code)
+	if bundle.Context.GetCode() != "AAPL" {
+		t.Errorf("expected code AAPL, got %s", bundle.Context.GetCode())
 	}
-	if len(bundle.AST.Expression) == 0 {
+	if len(bundle.AST.Statements) == 0 {
 		t.Error("expected non-empty AST")
 	}
 	if bundle.Metadata["version"] != "2.1" {
@@ -160,13 +160,20 @@ func TestCompile_StopLossSingleValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
-	if bundle.Context.GetStopLossRange() == nil {
+	if bundle == nil || bundle.Context == nil {
+		t.Fatal("expected non-nil bundle and context")
+	}
+	slr := bundle.Context.GetStopLossRange()
+	if slr == nil {
 		t.Fatal("expected stop_loss range to be set for single value")
 	}
-	if bundle.Context.GetStopLossRange().Begin.Value != "-10" {
-		t.Errorf("expected stop_loss begin -10, got %s", bundle.Context.GetStopLossRange().Begin.Value)
+	if slr.Begin == nil {
+		t.Fatal("expected stop_loss range begin to be non-nil")
 	}
-	if bundle.Context.GetStopLossRange().End.Value != "" {
-		t.Errorf("expected open-ended range (end empty), got %s", bundle.Context.GetStopLossRange().End.Value)
+	if slr.Begin.Value != "-10" {
+		t.Errorf("expected stop_loss begin -10, got %s", slr.Begin.Value)
+	}
+	if slr.End != nil && slr.End.Value != "" {
+		t.Errorf("expected open-ended range (end empty), got %s", slr.End.Value)
 	}
 }

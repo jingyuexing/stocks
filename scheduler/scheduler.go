@@ -28,9 +28,9 @@ type Job struct {
 	ID       string
 	Type     JobType
 	Spec     string // Cron 表达式
-	Expr     ast.ExpressionNode
+	Expr     any    // 关联的表达式或语句（运行时透传，避免直接依赖 ast）
 	Context  *transformer.StockContext
-	Callback func(ctx *transformer.StockContext, expr ast.ExpressionNode)
+	Callback func(ctx *transformer.StockContext, expr any)
 }
 
 // Scheduler 基于 cron 的定时任务调度器
@@ -117,74 +117,74 @@ func (s *Scheduler) ListJobs() []string {
 	return ids
 }
 
-// ScheduleFromAST 根据 AST 表达式自动生成定时任务
-func (s *Scheduler) ScheduleFromAST(root ast.RootNode, priceCheckInterval string) error {
+// ScheduleFromAST 根据 AST 语句自动生成定时任务
+func (s *Scheduler) ScheduleFromAST(root *ast.ProgramNode, priceCheckInterval string) error {
 	if priceCheckInterval == "" {
 		priceCheckInterval = "0 */5 * * * *" // 默认每5分钟
 	}
 
-	for _, expr := range root.Expression {
-		switch expr.Type {
-		case ast.KeepExpression:
-			// 为 keep 表达式添加持仓时间检查
-			_, err := s.AddJob(Job{
-				ID:   "keep_check",
-				Type: JobTypeKeepCheck,
-				Spec: "0 * * * * *", // 每分钟检查一次持仓时间
-				Expr: expr,
-				Callback: func(ctx *transformer.StockContext, e ast.ExpressionNode) {
-					ok, err := ctx.UseKeep()
-					if err != nil {
-						fmt.Printf("[scheduler] keep check error: %v\n", err)
-						return
-					}
-					if !ok {
-						fmt.Println("[scheduler] keep duration expired, triggering stop")
-						ctx.Emiter.Emit("keep_expired", ctx)
-					}
-				},
-			})
-			if err != nil {
-				return fmt.Errorf("failed to schedule keep check: %w", err)
+	for _, stmt := range root.Statements {
+		switch st := stmt.(type) {
+		case *ast.ConfigStmtNode:
+			switch st.Key {
+			case "keep":
+				_, err := s.AddJob(Job{
+					ID:   "keep_check",
+					Type: JobTypeKeepCheck,
+					Spec: "0 * * * * *", // 每分钟检查一次持仓时间
+					Expr: st,
+					Callback: func(ctx *transformer.StockContext, e any) {
+						ok, err := ctx.UseKeep()
+						if err != nil {
+							fmt.Printf("[scheduler] keep check error: %v\n", err)
+							return
+						}
+						if !ok {
+							fmt.Println("[scheduler] keep duration expired, triggering stop")
+							ctx.Emiter.Emit("keep_expired", ctx)
+						}
+					},
+				})
+				if err != nil {
+					return fmt.Errorf("failed to schedule keep check: %w", err)
+				}
+			case "stop":
+				_, err := s.AddJob(Job{
+					ID:   "stop_check",
+					Type: JobTypeStopCheck,
+					Spec: priceCheckInterval,
+					Expr: st,
+					Callback: func(ctx *transformer.StockContext, e any) {
+						ok, err := ctx.UseStop()
+						if err != nil {
+							fmt.Printf("[scheduler] stop check error: %v\n", err)
+							return
+						}
+						if ok {
+							fmt.Println("[scheduler] stop condition triggered")
+							ctx.Emiter.Emit("stop_triggered", ctx)
+						}
+					},
+				})
+				if err != nil {
+					return fmt.Errorf("failed to schedule stop check: %w", err)
+				}
 			}
-
-		case ast.StopExpression:
-			// 为止损/止盈添加股价检查
-			_, err := s.AddJob(Job{
-				ID:   "stop_check",
-				Type: JobTypeStopCheck,
-				Spec: priceCheckInterval,
-				Expr: expr,
-				Callback: func(ctx *transformer.StockContext, e ast.ExpressionNode) {
-					ok, err := ctx.UseStop()
-					if err != nil {
-						fmt.Printf("[scheduler] stop check error: %v\n", err)
-						return
-					}
-					if ok {
-						fmt.Println("[scheduler] stop condition triggered")
-						ctx.Emiter.Emit("stop_triggered", ctx)
-					}
-				},
-			})
-			if err != nil {
-				return fmt.Errorf("failed to schedule stop check: %w", err)
-			}
-
-		case ast.GridExpression:
-			// 为网格交易添加检查
-			_, err := s.AddJob(Job{
-				ID:   "grid_check",
-				Type: JobTypeGridCheck,
-				Spec: priceCheckInterval,
-				Expr: expr,
-				Callback: func(ctx *transformer.StockContext, e ast.ExpressionNode) {
-					fmt.Println("[scheduler] grid check running")
-					ctx.Emiter.Emit("grid_check", ctx, e)
-				},
-			})
-			if err != nil {
-				return fmt.Errorf("failed to schedule grid check: %w", err)
+		case *ast.StrategyStmtNode:
+			if st.Kind == "grid" {
+				_, err := s.AddJob(Job{
+					ID:   "grid_check",
+					Type: JobTypeGridCheck,
+					Spec: priceCheckInterval,
+					Expr: st,
+					Callback: func(ctx *transformer.StockContext, e any) {
+						fmt.Println("[scheduler] grid check running")
+						ctx.Emiter.Emit("grid_check", ctx, e)
+					},
+				})
+				if err != nil {
+					return fmt.Errorf("failed to schedule grid check: %w", err)
+				}
 			}
 		}
 	}
@@ -198,7 +198,7 @@ func (s *Scheduler) NewPriceCheckJob(spec string, callback func(ctx *transformer
 		ID:   "price_check",
 		Type: JobTypePriceCheck,
 		Spec: spec,
-		Callback: func(ctx *transformer.StockContext, _ ast.ExpressionNode) {
+		Callback: func(ctx *transformer.StockContext, _ any) {
 			if callback != nil {
 				callback(ctx)
 			}

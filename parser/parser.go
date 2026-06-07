@@ -2,111 +2,83 @@ package parser
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jingyuexing/stocks/ast"
 	"github.com/jingyuexing/stocks/tokenizer"
 )
 
-func createExpression(kind ast.NodeType) ast.ExpressionNode {
-	return ast.ExpressionNode{
-		Node:   ast.Node{Type: kind},
-		Params: make([]ast.Literal, 0),
-		Body:   make([]ast.ExpressionNode, 0),
-	}
-}
+// ---------- 优先级 ----------
+const (
+	precLowest = iota
+	precOr
+	precAnd
+	precEq
+	precRel
+	precAdd
+	precMul
+	precPrefix
+	precCall
+)
 
-func createRange() ast.RangeExpressionNode {
-	return ast.RangeExpressionNode{Node: ast.Node{Type: ast.RangeExpression}}
-}
-
-func createRoot() ast.RootNode {
-	return ast.RootNode{
-		Node:       ast.Node{Type: ast.Program},
-		Expression: make([]ast.ExpressionNode, 0),
-	}
-}
-
-func createLiteral(token tokenizer.Token) ast.Literal {
-	lit := ast.Literal{Value: token.Value}
-	switch token.Kind {
-	case tokenizer.Float:
-		lit.Node.Type = ast.FloatLiteral
-	case tokenizer.Integer:
-		lit.Node.Type = ast.IntegerLiteral
-	case tokenizer.String:
-		lit.Node.Type = ast.StringLiteral
-	default:
-		lit.Node.Type = ast.TextLiteral
-	}
-	return lit
-}
-
-func durationToNumber(literal ast.Literal) time.Duration {
-	if literal.Node.Type != ast.DurationLiteral {
-		return 0
-	}
-	var d time.Duration
-	switch literal.Unit {
-	case "ms":
-		d = time.Millisecond
-	case "s":
-		d = time.Second
-	case "m", "min":
-		d = time.Minute
-	case "h", "H":
-		d = time.Hour
-	case "d":
-		d = time.Hour * 24
-	case "W":
-		d = time.Hour * 24 * 7
-	case "M":
-		d = time.Hour * 24 * 30
-	case "Y":
-		d = time.Hour * 24 * 365
-	}
-	v, _ := strconv.ParseInt(literal.Value, 10, 64)
-	return time.Duration(v * int64(d))
-}
-
-// parserImpl 解析器
-type parserImpl struct {
-	tokens  []tokenizer.Token
-	current int
-	length  int
+// ---------- Parser ----------
+type Parser struct {
+	tokens []tokenizer.Token
+	pos    int
+	length int
+	errors []string
 }
 
 // NewParser 创建解析器
-func NewParser(tokens []tokenizer.Token) *parserImpl {
-	return &parserImpl{tokens: tokens, current: 0, length: len(tokens)}
-}
-
-func (p *parserImpl) next() {
-	p.current++
-	if p.current >= p.length {
-		p.current = p.length - 1
+func NewParser(tokens []tokenizer.Token) *Parser {
+	return &Parser{
+		tokens: tokens,
+		length: len(tokens),
 	}
 }
 
-func (p *parserImpl) peek(offset int) tokenizer.Token {
-	idx := p.current + offset
+// Parse 包级入口函数
+func Parse(tokens []tokenizer.Token) *ast.ProgramNode {
+	return NewParser(tokens).ParseProgram()
+}
+
+// ---------- 底层辅助 ----------
+func (p *Parser) next() {
+	p.pos++
+	if p.pos >= p.length {
+		p.pos = p.length - 1
+	}
+}
+
+func (p *Parser) peek(offset int) tokenizer.Token {
+	idx := p.pos + offset
 	if idx >= 0 && idx < p.length {
 		return p.tokens[idx]
 	}
 	return tokenizer.Token{Kind: tokenizer.EOF, Value: ""}
 }
 
-func (p *parserImpl) cur() tokenizer.Token {
-	if p.current < p.length {
-		return p.tokens[p.current]
+func (p *Parser) cur() tokenizer.Token {
+	if p.pos < p.length {
+		return p.tokens[p.pos]
 	}
 	return tokenizer.Token{Kind: tokenizer.EOF, Value: ""}
 }
 
-func (p *parserImpl) skipTerminators() {
-	for p.current < p.length {
+func (p *Parser) expect(kind tokenizer.TokenKind) bool {
+	return p.cur().Kind == kind
+}
+
+func (p *Parser) consume(kind tokenizer.TokenKind) bool {
+	if p.cur().Kind == kind {
+		p.next()
+		return true
+	}
+	return false
+}
+
+func (p *Parser) skipTerminators() {
+	for p.pos < p.length {
 		k := p.cur().Kind
 		if k == tokenizer.Terminator || k == tokenizer.Semicolon {
 			p.next()
@@ -116,790 +88,593 @@ func (p *parserImpl) skipTerminators() {
 	}
 }
 
-func (p *parserImpl) isGlobalConfigToken(kind tokenizer.TokenKind) bool {
-	switch kind {
-	case tokenizer.KeywordKeep, tokenizer.KeywordHoldMax, tokenizer.KeywordCooldown,
-		tokenizer.KeywordSession, tokenizer.KeywordActive, tokenizer.KeywordPause,
-		tokenizer.KeywordPartialFill, tokenizer.KeywordCompoundProfit, tokenizer.KeywordSkipIfGapped, tokenizer.KeywordFallback,
-		tokenizer.KeywordPosition, tokenizer.KeywordSizing, tokenizer.KeywordBasePosition,
-		tokenizer.KeywordPyramidStep, tokenizer.KeywordMaxPyramidLayers, tokenizer.KeywordFixedFraction,
-		tokenizer.KeywordVolatilityTarget, tokenizer.KeywordAtrPeriod, tokenizer.KeywordRiskPerTrade,
-		tokenizer.KeywordRiskPerGrid, tokenizer.KeywordMaxDrawdown, tokenizer.KeywordPositionDecay,
-		tokenizer.KeywordGrossExposure, tokenizer.KeywordNetExposure, tokenizer.KeywordBetaNeutral,
-		tokenizer.KeywordRebalance, tokenizer.KeywordLeverage, tokenizer.KeywordMargin,
-		tokenizer.KeywordHedge, tokenizer.KeywordFundingPriority, tokenizer.KeywordMaxShort,
-		tokenizer.KeywordBorrowRateLimit:
-		return true
-	}
-	return false
+func (p *Parser) isAtEnd() bool {
+	return p.cur().Kind == tokenizer.EOF
 }
 
-func (p *parserImpl) isRiskConfigToken(kind tokenizer.TokenKind) bool {
-	switch kind {
-	case tokenizer.KeywordMaxPosition, tokenizer.KeywordStopLoss, tokenizer.KeywordSlippageTolerance, tokenizer.KeywordCircuitBreaker:
-		return true
-	}
-	return false
+func (p *Parser) errorf(format string, args ...interface{}) {
+	p.errors = append(p.errors, fmt.Sprintf(format, args...))
 }
 
-func (p *parserImpl) parseLiteral() ast.Literal {
-	literal := ast.Literal{}
-	neg := false
-	if p.cur().Kind == tokenizer.Negative {
-		neg = true
-		p.next()
+func (p *Parser) precedence() int {
+	switch p.cur().Kind {
+	case tokenizer.Or:
+		return precOr
+	case tokenizer.And:
+		return precAnd
+	case tokenizer.EqualEqual, tokenizer.NotEqual:
+		return precEq
+	case tokenizer.LessThan, tokenizer.GreaterThan, tokenizer.LessEqual, tokenizer.GreaterEqual:
+		return precRel
+	case tokenizer.Plus, tokenizer.Negative:
+		return precAdd
+	case tokenizer.Star, tokenizer.Slash:
+		return precMul
+	default:
+		return precLowest
 	}
-	tok := p.cur()
-	if !tokenizer.TokenIsNumber(tok) {
-		if neg {
-			fmt.Println("Expected number after '-'")
-		}
-		return literal
-	}
-	literal = createLiteral(tok)
-	if neg {
-		literal.Value = "-" + literal.Value
-	}
-	if p.current < p.length-1 {
-		nextTok := p.tokens[p.current+1]
-		if tokenizer.IsTimeUnitToken(nextTok) {
-			literal.Node.Type = ast.DurationLiteral
-			literal.Unit = nextTok.Value
-			p.next()
-		} else if nextTok.Kind == tokenizer.Per {
-			literal.Node.Type = ast.PercentLiteral
-			literal.Unit = nextTok.Value
-			p.next()
-		}
-	}
-	p.next()
-	return literal
 }
 
-func (p *parserImpl) parseDuration() ast.Literal {
-	dur := ast.Literal{}
-	neg := false
-	if p.cur().Kind == tokenizer.Negative {
-		neg = true
-		p.next()
+// ---------- 表达式解析（Pratt Parser） ----------
+type prefixParselet func(*Parser) ast.Expr
+type infixParselet func(*Parser, ast.Expr) ast.Expr
+
+var prefixParselets map[tokenizer.TokenKind]prefixParselet
+var infixParselets map[tokenizer.TokenKind]infixParselet
+
+func init() {
+	prefixParselets = map[tokenizer.TokenKind]prefixParselet{
+		tokenizer.Integer:      parseLiteralPrefix,
+		tokenizer.Float:        parseLiteralPrefix,
+		tokenizer.String:       parseLiteralPrefix,
+		tokenizer.Identifier:   parseIdentifierPrefix,
+		tokenizer.KeywordTrue:  parseIdentifierPrefix,
+		tokenizer.KeywordFalse: parseIdentifierPrefix,
+		tokenizer.Negative:     parsePrefixNegative,
+		tokenizer.Dollar:       parseVariablePrefix,
+		tokenizer.At:           parseReferencePrefix,
+		tokenizer.LeftParen:    parseGroupedPrefix,
 	}
-	if !tokenizer.TokenIsNumber(p.cur()) {
-		return dur
+
+	infixParselets = map[tokenizer.TokenKind]infixParselet{
+		tokenizer.Plus:         parseInfixLeft(precAdd),
+		tokenizer.Negative:     parseInfixLeft(precAdd),
+		tokenizer.Star:         parseInfixLeft(precMul),
+		tokenizer.Slash:        parseInfixLeft(precMul),
+		tokenizer.EqualEqual:   parseInfixLeft(precEq),
+		tokenizer.NotEqual:     parseInfixLeft(precEq),
+		tokenizer.LessThan:     parseInfixLeft(precRel),
+		tokenizer.GreaterThan:  parseInfixLeft(precRel),
+		tokenizer.LessEqual:    parseInfixLeft(precRel),
+		tokenizer.GreaterEqual: parseInfixLeft(precRel),
+		tokenizer.And:          parseInfixLeft(precAnd),
+		tokenizer.Or:           parseInfixLeft(precOr),
 	}
-	if p.current+1 >= p.length {
-		return dur
-	}
-	nextTok := p.tokens[p.current+1]
-	if !tokenizer.IsTimeUnitToken(nextTok) {
-		if neg {
-			fmt.Printf("invalid time unit %s\n", nextTok.Value)
-		}
-		return dur
-	}
-	dur = createLiteral(p.cur())
-	if neg {
-		dur.Value = "-" + dur.Value
-	}
-	dur.Node.Type = ast.DurationLiteral
-	dur.Unit = nextTok.Value
-	p.next()
-	p.next()
-	return dur
 }
 
-func (p *parserImpl) parseRange() *ast.RangeExpressionNode {
-	saved := p.current
-	if p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot {
-		p.next()
-		r := createRange()
-		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			r.End = p.parseLiteral()
+func (p *Parser) parseExpression(precedence int) ast.Expr {
+	prefix := prefixParselets[p.cur().Kind]
+	if prefix == nil {
+		// 未注册前缀解析函数的关键字，回退为标识符
+		if p.cur().Kind.IsKeyword() {
+			prefix = parseIdentifierPrefix
+		} else {
+			p.errorf("unexpected token in expression: %v (%s)", p.cur().Kind, p.cur().Value)
+			return nil
 		}
-		return &r
 	}
-	if !tokenizer.TokenIsNumber(p.cur()) && p.cur().Kind != tokenizer.Negative {
-		return nil
-	}
-	begin := p.parseLiteral()
-	if p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot {
-		p.next()
-		r := createRange()
-		r.Begin = begin
-		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			r.End = p.parseLiteral()
+	left := prefix(p)
+
+	for precedence < p.precedence() {
+		infix := infixParselets[p.cur().Kind]
+		if infix == nil {
+			break
 		}
-		return &r
+		left = infix(p, left)
 	}
-	p.current = saved
-	return nil
+	return left
 }
 
-func (p *parserImpl) parseDate() ast.Literal {
-	lit := ast.Literal{}
-	if p.cur().Kind != tokenizer.Integer {
-		return lit
-	}
-	year := p.cur().Value
-	p.next()
-	if p.cur().Kind != tokenizer.Negative {
-		return lit
-	}
-	p.next()
-	if p.cur().Kind != tokenizer.Integer {
-		return lit
-	}
-	month := p.cur().Value
-	p.next()
-	if p.cur().Kind != tokenizer.Negative {
-		return lit
+func parseLiteralPrefix(p *Parser) ast.Expr {
+	return p.parseLiteral()
+}
+
+func parseIdentifierPrefix(p *Parser) ast.Expr {
+	lit := &ast.IdentifierExprNode{
+		BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.IdentifierExpr}},
+		Name:     p.cur().Value,
 	}
 	p.next()
-	if p.cur().Kind != tokenizer.Integer {
-		return lit
-	}
-	day := p.cur().Value
-	p.next()
-	lit.Node.Type = ast.DateLiteral
-	lit.Value = fmt.Sprintf("%s-%s-%s", year, month, day)
 	return lit
 }
 
-func (p *parserImpl) parseActionStmt() ast.ExpressionNode {
-	var expr ast.ExpressionNode
+func parsePrefixNegative(p *Parser) ast.Expr {
+	p.next() // consume -
+	expr := p.parseExpression(precPrefix)
+	if lit, ok := expr.(*ast.Literal); ok {
+		lit.Value = "-" + lit.Value
+		return lit
+	}
+	return &ast.UnaryExprNode{
+		BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.UnaryExpr}},
+		Op:       "-",
+		Expr:     expr,
+	}
+}
+
+func parseVariablePrefix(p *Parser) ast.Expr {
+	p.next() // consume $
+	if p.cur().Kind == tokenizer.LeftBraces {
+		// ${name} 宏展开
+		p.next() // consume {
+		name := ""
+		if p.cur().Kind == tokenizer.Identifier || p.cur().Kind.IsKeyword() {
+			name = p.cur().Value
+			p.next()
+		}
+		if p.cur().Kind == tokenizer.RightBraces {
+			p.next()
+		}
+		return &ast.MacroExpandExprNode{
+			BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.MacroExpandExpr}},
+			Name:     name,
+		}
+	}
+	name := ""
+	if p.cur().Kind == tokenizer.Identifier || p.cur().Kind.IsKeyword() {
+		name = p.cur().Value
+		p.next()
+	}
+	return &ast.VariableExprNode{
+		BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.VariableExpr}},
+		Name:     name,
+	}
+}
+
+func parseReferencePrefix(p *Parser) ast.Expr {
+	p.next() // consume @
+	name := ""
+	if p.cur().Kind == tokenizer.Identifier {
+		name = p.cur().Value
+		p.next()
+	}
+	return &ast.ReferenceExprNode{
+		BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.ReferenceExpr}},
+		Name:     name,
+	}
+}
+
+func parseGroupedPrefix(p *Parser) ast.Expr {
+	p.next() // consume (
+	expr := p.parseExpression(precLowest)
+	if p.cur().Kind == tokenizer.RightParen {
+		p.next()
+	}
+	return expr
+}
+
+func parseInfixLeft(precedence int) infixParselet {
+	return func(p *Parser, left ast.Expr) ast.Expr {
+		op := p.cur().Value
+		p.next()
+		right := p.parseExpression(precedence)
+		return &ast.BinaryExprNode{
+			BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.BinaryExpr}},
+			Op:       op,
+			Left:     left,
+			Right:    right,
+		}
+	}
+}
+
+// ---------- 字面量 / 范围 ----------
+func (p *Parser) parseLiteral() *ast.Literal {
+	neg := false
+	if p.cur().Kind == tokenizer.Negative {
+		neg = true
+		p.next()
+	}
+
+	tok := p.cur()
+	if !tokenizer.TokenIsNumber(tok) && tok.Kind != tokenizer.String && tok.Kind != tokenizer.Time && tok.Kind != tokenizer.Date {
+		if neg {
+			p.errorf("expected number or string after '-'")
+		}
+		return nil
+	}
+
+	lit := &ast.Literal{
+		BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.LiteralExpr}},
+		Value:    tok.Value,
+	}
+
+	// 根据 token 类型设置 LiteralType，防止后续转换丢失类型信息
+	switch tok.Kind {
+	case tokenizer.Integer:
+		lit.LiteralType = ast.Integer
+	case tokenizer.Float:
+		lit.LiteralType = ast.Float
+	case tokenizer.String:
+		lit.LiteralType = ast.Text
+	case tokenizer.Time:
+		lit.LiteralType = ast.Time
+	case tokenizer.Date:
+		lit.LiteralType = ast.Date
+	}
+
+	if neg {
+		lit.Value = "-" + lit.Value
+	}
+	p.next()
+
+	// 百分比
+	if p.cur().Kind == tokenizer.Per {
+		lit.Unit = "%"
+		p.next()
+	} else if p.cur().Kind == tokenizer.Identifier {
+		if tokenizer.IsTimeUnit(p.cur().Value) {
+			lit.Unit = p.cur().Value
+			p.next()
+		} else if tokenizer.IsAmountUnit(p.cur().Value) {
+			lit.Unit = p.cur().Value
+			p.next()
+		}
+	}
+
+	return lit
+}
+
+func (p *Parser) parseLiteralOrIdentifier() ast.Expr {
 	switch p.cur().Kind {
-	case tokenizer.KeywordBuy:
-		expr = createExpression(ast.BuyExpression)
-	case tokenizer.KeywordSell:
-		expr = createExpression(ast.SellExpression)
-	case tokenizer.KeywordSellShort:
-		expr = createExpression(ast.SellShortExpression)
-	case tokenizer.KeywordBuyCover:
-		expr = createExpression(ast.BuyCoverExpression)
+	case tokenizer.Integer, tokenizer.Float, tokenizer.String, tokenizer.Negative, tokenizer.Time, tokenizer.Date:
+		return p.parseLiteral()
+	case tokenizer.Identifier, tokenizer.KeywordTrue, tokenizer.KeywordFalse:
+		lit := &ast.IdentifierExprNode{
+			BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.IdentifierExpr}},
+			Name:     p.cur().Value,
+		}
+		p.next()
+		return lit
 	default:
-		return expr
-	}
-	p.next()
-	for p.current < p.length {
-		tok := p.cur()
-		if tok.Kind == tokenizer.Terminator || tok.Kind == tokenizer.Semicolon ||
-			tok.Kind == tokenizer.EOF || tok.Kind == tokenizer.RightBraces || tok.Kind == tokenizer.At {
-			break
-		}
-		if tok.Kind == tokenizer.Identifier && (tok.Value == "from" || tok.Value == "remaining") {
-			break
-		}
-		if tokenizer.TokenIsNumber(tok) || tok.Kind == tokenizer.Negative {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		} else if tok.Kind == tokenizer.Identifier {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: tok.Value})
-			p.next()
-			if p.cur().Kind == tokenizer.Plus {
-				p.next()
-			}
-		} else if tok.Kind == tokenizer.Dollar {
-			varExpr := p.parseVariable()
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.ReferenceLiteral}, Value: varExpr.Name})
-		} else if tok.Kind == tokenizer.String {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.StringLiteral}, Value: tok.Value})
-			p.next()
-		} else {
-			p.next()
-		}
-	}
-	if p.cur().Kind == tokenizer.At {
 		p.next()
-		if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "market" {
-			expr.Name = "market"
-			p.next()
-		} else if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "limit" {
-			expr.Name = "limit"
-			p.next()
-			if p.cur().Kind == tokenizer.Plus {
-				p.next()
-			}
-			if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-				expr.Value = p.parseLiteral()
-			}
-		}
+		return nil
 	}
-	if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "from" {
-		p.next()
-		if p.cur().Kind == tokenizer.Identifier {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: "from_" + p.cur().Value})
-			p.next()
-		}
-	} else if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "remaining" {
-		expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: "remaining"})
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
-		p.next()
-	}
-	return expr
 }
 
-func (p *parserImpl) parseGlobalConfig() ast.ExpressionNode {
-	kindMap := map[tokenizer.TokenKind]ast.NodeType{
-		tokenizer.KeywordKeep: ast.KeepExpression, tokenizer.KeywordHoldMax: ast.HoldMaxExpression,
-		tokenizer.KeywordCooldown: ast.CooldownExpression, tokenizer.KeywordSession: ast.SessionExpression,
-		tokenizer.KeywordActive: ast.ActiveExpression, tokenizer.KeywordPause: ast.PauseExpression,
-		tokenizer.KeywordPartialFill: ast.PartialFillExpression, tokenizer.KeywordCompoundProfit: ast.CompoundProfitExpression,
-		tokenizer.KeywordSkipIfGapped: ast.SkipIfGappedExpression, tokenizer.KeywordFallback: ast.FallbackExpression,
-		tokenizer.KeywordPosition: ast.PositionExpression, tokenizer.KeywordSizing: ast.SizingExpression,
-		tokenizer.KeywordBasePosition: ast.BasePositionExpression, tokenizer.KeywordPyramidStep: ast.PyramidStepExpression,
-		tokenizer.KeywordMaxPyramidLayers: ast.MaxPyramidLayersExpression, tokenizer.KeywordFixedFraction: ast.FixedFractionExpression,
-		tokenizer.KeywordVolatilityTarget: ast.VolatilityTargetExpression, tokenizer.KeywordAtrPeriod: ast.AtrPeriodExpression,
-		tokenizer.KeywordRiskPerTrade: ast.RiskPerTradeExpression, tokenizer.KeywordRiskPerGrid: ast.RiskPerGridExpression,
-		tokenizer.KeywordMaxDrawdown: ast.MaxDrawdownExpression, tokenizer.KeywordPositionDecay: ast.PositionDecayExpression,
-		tokenizer.KeywordGrossExposure: ast.GrossExposureExpression, tokenizer.KeywordNetExposure: ast.NetExposureExpression,
-		tokenizer.KeywordBetaNeutral: ast.BetaNeutralExpression, tokenizer.KeywordRebalance: ast.RebalanceExpression,
-		tokenizer.KeywordLeverage: ast.LeverageExpression, tokenizer.KeywordMargin: ast.MarginExpression,
-		tokenizer.KeywordHedge: ast.HedgeExpression, tokenizer.KeywordFundingPriority: ast.FundingPriorityExpression,
-		tokenizer.KeywordMaxShort: ast.MaxShortExpression, tokenizer.KeywordBorrowRateLimit: ast.BorrowRateLimitExpression,
+func (p *Parser) parseRangeExpr() *ast.RangeExprNode {
+	saved := p.pos
+	r := &ast.RangeExprNode{
+		BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.RangeExpr}},
 	}
-	nodeType, ok := kindMap[p.cur().Kind]
-	if !ok {
-		return ast.ExpressionNode{}
-	}
-	expr := createExpression(nodeType)
-	p.next()
-	switch nodeType {
-	case ast.KeepExpression, ast.HoldMaxExpression:
-		for p.current < p.length {
-			k := p.cur().Kind
-			if k == tokenizer.Terminator || k == tokenizer.Semicolon || k == tokenizer.EOF || k == tokenizer.RightBraces {
-				break
-			}
-			dur := p.parseDuration()
-			if dur.Node.Type == ast.DurationLiteral {
-				expr.Params = append(expr.Params, dur)
-			} else {
-				break
-			}
-		}
-	case ast.CooldownExpression:
-		dur := p.parseDuration()
-		if dur.Node.Type == ast.DurationLiteral {
-			expr.Params = append(expr.Params, dur)
-		}
-		if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "per" {
-			p.next()
-			if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "level" {
-				expr.Name = "per_level"
-				p.next()
-			}
-		}
-	case ast.SessionExpression:
-		for p.current < p.length {
-			if !tokenizer.TokenIsNumber(p.cur()) {
-				break
-			}
-			hour := p.cur().Value
-			p.next()
-			if p.cur().Kind == tokenizer.Colon {
-				p.next()
-			}
-			if !tokenizer.TokenIsNumber(p.cur()) {
-				break
-			}
-			minute := p.cur().Value
-			p.next()
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TimePointLiteral}, Value: hour + ":" + minute})
-			if p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot || p.cur().Kind == tokenizer.Negative {
-				if p.cur().Kind == tokenizer.Negative {
-					p.next()
-				} else {
-					p.next()
-				}
-			} else {
-				break
-			}
-		}
-		if p.cur().Kind == tokenizer.Identifier && tokenizer.IsTimezone(p.cur().Value) {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value})
-			p.next()
-		}
-	case ast.ActiveExpression, ast.PauseExpression:
-		date1 := p.parseDate()
-		if date1.Node.Type == ast.DateLiteral {
-			expr.Params = append(expr.Params, date1)
-		}
-		if p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot {
-			p.next()
-			date2 := p.parseDate()
-			if date2.Node.Type == ast.DateLiteral {
-				expr.Params = append(expr.Params, date2)
-			}
-		}
-	case ast.PartialFillExpression, ast.CompoundProfitExpression, ast.FallbackExpression, ast.BetaNeutralExpression, ast.MarginExpression, ast.FundingPriorityExpression:
-		if p.cur().Kind == tokenizer.Identifier || p.cur().Kind == tokenizer.KeywordTrue || p.cur().Kind == tokenizer.KeywordFalse {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value})
-			p.next()
-		}
-	case ast.SkipIfGappedExpression:
-	case ast.SizingExpression:
-		if p.cur().Kind == tokenizer.Identifier && tokenizer.IsSizingMethod(p.cur().Value) {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value})
-			p.next()
-		}
-	case ast.PositionExpression:
-		if p.cur().Kind == tokenizer.Identifier && (p.cur().Value == "fixed" || p.cur().Value == "dynamic") {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value})
-			p.next()
-		}
-		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-	case ast.RebalanceExpression:
-		if p.cur().Kind == tokenizer.Identifier && tokenizer.IsRebalancePeriod(p.cur().Value) {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value})
-			p.next()
-		}
-		if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "at" {
-			p.next()
-			if tokenizer.TokenIsNumber(p.cur()) {
-				hour := p.cur().Value
-				p.next()
-				if p.cur().Kind == tokenizer.Colon {
-					p.next()
-				}
-				if tokenizer.TokenIsNumber(p.cur()) {
-					minute := p.cur().Value
-					p.next()
-					expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TimePointLiteral}, Value: hour + ":" + minute})
-				}
-			}
-		}
-	case ast.BasePositionExpression, ast.MaxDrawdownExpression, ast.BorrowRateLimitExpression,
-		ast.FixedFractionExpression, ast.VolatilityTargetExpression,
-		ast.GrossExposureExpression, ast.NetExposureExpression,
-		ast.RiskPerTradeExpression, ast.RiskPerGridExpression, ast.PositionDecayExpression,
-		ast.SlippageToleranceExpression:
-		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-		if nodeType == ast.RiskPerTradeExpression || nodeType == ast.RiskPerGridExpression || nodeType == ast.GrossExposureExpression || nodeType == ast.NetExposureExpression {
-			if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "capital" {
-				expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: "capital"})
-				p.next()
-			}
-		}
-		if nodeType == ast.PositionDecayExpression {
-			if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "per" {
-				p.next()
-				dur := p.parseDuration()
-				if dur.Node.Type == ast.DurationLiteral {
-					expr.Params = append(expr.Params, dur)
-				}
-			}
-		}
-	case ast.PyramidStepExpression:
-		if tokenizer.TokenIsNumber(p.cur()) {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-		if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "x" {
-			p.next()
-		}
-	case ast.MaxPyramidLayersExpression, ast.AtrPeriodExpression, ast.MaxShortExpression, ast.LeverageExpression:
-		if tokenizer.TokenIsNumber(p.cur()) {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-		if nodeType == ast.LeverageExpression && p.cur().Kind == tokenizer.Identifier && p.cur().Value == "x" {
-			p.next()
-		}
-		if nodeType == ast.MaxShortExpression && p.cur().Kind == tokenizer.Identifier && p.cur().Value == "shares" {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: "shares"})
-			p.next()
-		}
-	case ast.HedgeExpression:
-		if tokenizer.TokenIsNumber(p.cur()) {
-			left := p.cur().Value
-			p.next()
-			if p.cur().Kind == tokenizer.Colon {
-				p.next()
-			}
-			if tokenizer.TokenIsNumber(p.cur()) {
-				right := p.cur().Value
-				p.next()
-				expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: left + ":" + right})
-			}
-		}
-	}
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
+
+	// open-ended begin: ...end
+	if p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot {
 		p.next()
+		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
+			r.End = p.parseLiteral()
+			return r
+		}
+		p.pos = saved
+		return nil
 	}
-	return expr
+
+	// 必须有 begin
+	if !tokenizer.TokenIsNumber(p.cur()) && p.cur().Kind != tokenizer.Negative {
+		return nil
+	}
+
+	r.Begin = p.parseLiteral()
+	if r.Begin == nil {
+		p.pos = saved
+		return nil
+	}
+
+	if p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot {
+		p.next()
+		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
+			r.End = p.parseLiteral()
+		}
+		return r
+	}
+
+	p.pos = saved
+	return nil
 }
 
-func (p *parserImpl) parseRiskConfig() ast.ExpressionNode {
-	kindMap := map[tokenizer.TokenKind]ast.NodeType{
-		tokenizer.KeywordMaxPosition: ast.MaxPositionExpression, tokenizer.KeywordStopLoss: ast.StopLossExpression,
-		tokenizer.KeywordSlippageTolerance: ast.SlippageToleranceExpression, tokenizer.KeywordCircuitBreaker: ast.CircuitBreakerExpression,
-	}
-	nodeType, ok := kindMap[p.cur().Kind]
-	if !ok {
-		return ast.ExpressionNode{}
-	}
-	expr := createExpression(nodeType)
-	p.next()
-	switch nodeType {
-	case ast.MaxPositionExpression:
-		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-		if p.cur().Kind == tokenizer.Identifier {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value})
-			p.next()
-		}
-	case ast.StopLossExpression:
-		r := p.parseRange()
-		if r != nil {
-			expr.Range = r
-		} else if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			// 单点值，如 stop_loss -10%
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-		if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "on" {
-			p.next()
-			if p.cur().Kind == tokenizer.Identifier {
-				expr.Name = "on_" + p.cur().Value
-				p.next()
-			}
-		}
-	case ast.SlippageToleranceExpression:
-		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-	case ast.CircuitBreakerExpression:
-		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-		if p.cur().Kind == tokenizer.Identifier && p.cur().Value == "in" {
-			p.next()
-			dur := p.parseDuration()
-			if dur.Node.Type == ast.DurationLiteral {
-				expr.Params = append(expr.Params, dur)
-			}
-		}
-	}
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
-		p.next()
-	}
-	return expr
-}
+// ---------- 程序 / Block ----------
 
-func (p *parserImpl) parseLevelBlock() ast.ExpressionNode {
-	if p.cur().Kind == tokenizer.KeywordOverride {
-		expr := createExpression(ast.OverrideExpression)
-		p.next()
-		for p.current < p.length && p.cur().Kind != tokenizer.Range && p.cur().Kind != tokenizer.TribleDot && p.cur().Kind != tokenizer.LeftBraces && p.cur().Kind != tokenizer.EOF {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value})
-			p.next()
-		}
-		if p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot {
-			r := p.parseRange()
-			if r != nil {
-				expr.Range = r
-			}
-		}
-		if p.cur().Kind == tokenizer.LeftBraces {
-			p.next()
-			expr.Body = p.parseGridBody()
-			if p.cur().Kind == tokenizer.RightBraces {
-				p.next()
-			}
-		}
-		return expr
+// ParseProgram 主解析入口
+func (p *Parser) ParseProgram() *ast.ProgramNode {
+	prog := &ast.ProgramNode{
+		Node:       ast.Node{Type: ast.Program},
+		Statements: []ast.Stmt{},
 	}
-	expr := createExpression(ast.GridExpression)
-	r := p.parseRange()
-	if r != nil {
-		expr.Range = r
-	}
-	if p.cur().Kind == tokenizer.KeywordCross {
-		expr.Name = "cross"
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.KeywordPriority {
-		p.next()
-		if tokenizer.TokenIsNumber(p.cur()) {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		for p.current < p.length && p.cur().Kind != tokenizer.RightBraces && p.cur().Kind != tokenizer.EOF {
-			p.skipTerminators()
-			if p.cur().Kind == tokenizer.RightBraces || p.cur().Kind == tokenizer.EOF {
-				break
-			}
-			if p.cur().Kind == tokenizer.KeywordBuy || p.cur().Kind == tokenizer.KeywordSell ||
-				p.cur().Kind == tokenizer.KeywordSellShort || p.cur().Kind == tokenizer.KeywordBuyCover {
-				expr.Body = append(expr.Body, p.parseActionStmt())
-			} else {
-				p.next()
-			}
-		}
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	}
-	return expr
-}
-
-func (p *parserImpl) parseGridBody() []ast.ExpressionNode {
-	body := make([]ast.ExpressionNode, 0)
-	for p.current < p.length && p.cur().Kind != tokenizer.RightBraces && p.cur().Kind != tokenizer.EOF {
+	for !p.isAtEnd() {
 		p.skipTerminators()
-		if p.cur().Kind == tokenizer.RightBraces || p.cur().Kind == tokenizer.EOF {
+		if p.isAtEnd() {
 			break
 		}
-		tok := p.cur()
-		switch tok.Kind {
-		case tokenizer.KeywordLoss:
-			body = append(body, p.parseLoss())
-		case tokenizer.KeywordProfit:
-			body = append(body, p.parseProfit())
-		case tokenizer.KeywordBuy, tokenizer.KeywordSell, tokenizer.KeywordSellShort, tokenizer.KeywordBuyCover:
-			body = append(body, p.parseActionStmt())
-		case tokenizer.KeywordKeep, tokenizer.KeywordHoldMax, tokenizer.KeywordCooldown,
-			tokenizer.KeywordSession, tokenizer.KeywordActive, tokenizer.KeywordPause,
-			tokenizer.KeywordPartialFill, tokenizer.KeywordCompoundProfit, tokenizer.KeywordSkipIfGapped, tokenizer.KeywordFallback,
-			tokenizer.KeywordPosition, tokenizer.KeywordSizing, tokenizer.KeywordBasePosition,
-			tokenizer.KeywordPyramidStep, tokenizer.KeywordMaxPyramidLayers, tokenizer.KeywordFixedFraction,
-			tokenizer.KeywordVolatilityTarget, tokenizer.KeywordAtrPeriod, tokenizer.KeywordRiskPerTrade,
-			tokenizer.KeywordRiskPerGrid, tokenizer.KeywordMaxDrawdown, tokenizer.KeywordPositionDecay,
-			tokenizer.KeywordGrossExposure, tokenizer.KeywordNetExposure, tokenizer.KeywordBetaNeutral,
-			tokenizer.KeywordRebalance, tokenizer.KeywordLeverage, tokenizer.KeywordMargin,
-			tokenizer.KeywordHedge, tokenizer.KeywordFundingPriority, tokenizer.KeywordMaxShort,
-			tokenizer.KeywordBorrowRateLimit:
-			body = append(body, p.parseGlobalConfig())
-		case tokenizer.KeywordMaxPosition, tokenizer.KeywordStopLoss, tokenizer.KeywordSlippageTolerance, tokenizer.KeywordCircuitBreaker:
-			body = append(body, p.parseRiskConfig())
-		case tokenizer.Negative, tokenizer.Integer, tokenizer.Float, tokenizer.Range, tokenizer.TribleDot:
-			body = append(body, p.parseLevelBlock())
-		case tokenizer.KeywordOverride:
-			body = append(body, p.parseLevelBlock())
-		case tokenizer.Dollar:
-			body = append(body, p.parseVariable())
-		case tokenizer.KeywordCross, tokenizer.KeywordPriority:
-			fmt.Printf("Unexpected token in grid body: %v\n", tok)
-			p.next()
-		case tokenizer.Terminator, tokenizer.Semicolon:
-			p.next()
-		default:
-			fmt.Printf("Unexpected token in grid body: %v\n", tok)
-			p.next()
+		stmt := p.parseStmt()
+		if stmt != nil {
+			prog.Statements = append(prog.Statements, stmt)
 		}
 	}
-	return body
+	return prog
 }
 
-func (p *parserImpl) parseLoss() ast.ExpressionNode {
-	expr := createExpression(ast.LossExpression)
-	p.next()
-	if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative ||
-		p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot {
-		r := p.parseRange()
-		if r != nil {
-			expr.Range = r
-		} else if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			expr.Params = append(expr.Params, p.parseLiteral())
+func (p *Parser) parseBlock(stopAt ...tokenizer.TokenKind) []ast.Stmt {
+	stmts := []ast.Stmt{}
+	for !p.isAtEnd() {
+		p.skipTerminators()
+		if p.isAtEnd() {
+			break
 		}
-	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		expr.Body = p.parseGridBody()
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	}
-	return expr
-}
-
-func (p *parserImpl) parseProfit() ast.ExpressionNode {
-	expr := createExpression(ast.ProfitExpression)
-	p.next()
-	if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative ||
-		p.cur().Kind == tokenizer.Range || p.cur().Kind == tokenizer.TribleDot {
-		r := p.parseRange()
-		if r != nil {
-			expr.Range = r
-		} else if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			expr.Params = append(expr.Params, p.parseLiteral())
-		}
-	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		expr.Body = p.parseGridBody()
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	}
-	return expr
-}
-
-func (p *parserImpl) parseGrid() ast.ExpressionNode {
-	expr := createExpression(ast.GridExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		expr.Body = p.parseGridBody()
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	} else {
-		fmt.Println("Expected '{' after 'grid'")
-	}
-	return expr
-}
-
-func (p *parserImpl) parseLong() ast.ExpressionNode {
-	expr := createExpression(ast.LongExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		expr.Body = p.parseGridBody()
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	}
-	return expr
-}
-
-func (p *parserImpl) parseShort() ast.ExpressionNode {
-	expr := createExpression(ast.ShortExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		expr.Body = p.parseGridBody()
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	}
-	return expr
-}
-
-func (p *parserImpl) parseBoth() ast.ExpressionNode {
-	expr := createExpression(ast.BothExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		for p.current < p.length && p.cur().Kind != tokenizer.KeywordLong && p.cur().Kind != tokenizer.RightBraces && p.cur().Kind != tokenizer.EOF {
-			p.skipTerminators()
-			if p.cur().Kind == tokenizer.KeywordLong {
-				break
-			}
-			if p.isGlobalConfigToken(p.cur().Kind) {
-				expr.Body = append(expr.Body, p.parseGlobalConfig())
-			} else {
-				p.next()
+		// 检查停止条件
+		for _, kind := range stopAt {
+			if p.cur().Kind == kind {
+				return stmts
 			}
 		}
-		if p.cur().Kind == tokenizer.KeywordLong {
-			expr.Body = append(expr.Body, p.parseLong())
-		}
-		if p.cur().Kind == tokenizer.KeywordShort {
-			expr.Body = append(expr.Body, p.parseShort())
-		}
-		for p.current < p.length && p.cur().Kind != tokenizer.RightBraces && p.cur().Kind != tokenizer.EOF {
-			p.skipTerminators()
-			if p.cur().Kind == tokenizer.RightBraces || p.cur().Kind == tokenizer.EOF {
-				break
-			}
-			if p.isGlobalConfigToken(p.cur().Kind) {
-				expr.Body = append(expr.Body, p.parseGlobalConfig())
-			} else if p.isRiskConfigToken(p.cur().Kind) {
-				expr.Body = append(expr.Body, p.parseRiskConfig())
-			} else {
-				p.next()
-			}
-		}
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
+		stmt := p.parseStmt()
+		if stmt != nil {
+			stmts = append(stmts, stmt)
 		}
 	}
-	return expr
+	return stmts
 }
 
-func (p *parserImpl) parsePortfolio() ast.ExpressionNode {
-	expr := createExpression(ast.PortfolioExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
+// ---------- 语句解析（表驱动） ----------
+var stmtParsers map[tokenizer.TokenKind]func(*Parser) ast.Stmt
+
+func init() {
+	stmtParsers = map[tokenizer.TokenKind]func(*Parser) ast.Stmt{
+		tokenizer.KeywordGrid:       parseStrategyStmt,
+		tokenizer.KeywordLong:       parseStrategyStmt,
+		tokenizer.KeywordShort:      parseStrategyStmt,
+		tokenizer.KeywordBoth:       parseStrategyStmt,
+		tokenizer.KeywordPortfolio:  parseStrategyStmt,
+		tokenizer.KeywordArbitrage:  parseStrategyStmt,
+		tokenizer.KeywordImport:     parseImportStmt,
+		tokenizer.KeywordExport:     parseExportStmt,
+		tokenizer.KeywordUse:        parseUseStmt,
+		tokenizer.KeywordTemplate:   parseTemplateStmt,
+		tokenizer.KeywordMacro:      parseMacroStmt,
+		tokenizer.KeywordIf:         parseIfStmt,
+		tokenizer.KeywordAssert:     parseAssertStmt,
+		tokenizer.KeywordTrigger:    parseFlowStmt,
+		tokenizer.KeywordUntil:      parseFlowStmt,
+		tokenizer.KeywordAtomic:     parseFlowStmt,
+		tokenizer.KeywordOnce:       parseFlowStmt,
+		tokenizer.KeywordTwice:      parseFlowStmt,
+		tokenizer.KeywordDaily:      parseFlowStmt,
+		tokenizer.KeywordWeekly:     parseFlowStmt,
+		tokenizer.KeywordMonthly:    parseFlowStmt,
+		tokenizer.KeywordYearly:     parseFlowStmt,
+		tokenizer.KeywordHourly:     parseFlowStmt,
+		tokenizer.KeywordBuy:        parseActionStmt,
+		tokenizer.KeywordSell:       parseActionStmt,
+		tokenizer.KeywordSellShort:  parseActionStmt,
+		tokenizer.KeywordBuyCover:   parseActionStmt,
+		tokenizer.KeywordSelect:     parseSelectStmt,
+		tokenizer.AnnotationComment: parseAnnotationStmt,
 	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		for p.current < p.length && p.cur().Kind != tokenizer.RightBraces && p.cur().Kind != tokenizer.EOF {
-			p.skipTerminators()
-			if p.cur().Kind == tokenizer.RightBraces || p.cur().Kind == tokenizer.EOF {
-				break
-			}
-			tok := p.cur()
-			switch tok.Kind {
-			case tokenizer.KeywordGrid:
-				expr.Body = append(expr.Body, p.parseGrid())
-			case tokenizer.KeywordLong:
-				expr.Body = append(expr.Body, p.parseLong())
-			case tokenizer.KeywordShort:
-				expr.Body = append(expr.Body, p.parseShort())
-			case tokenizer.KeywordBoth:
-				expr.Body = append(expr.Body, p.parseBoth())
-			case tokenizer.KeywordPortfolio:
-				expr.Body = append(expr.Body, p.parsePortfolio())
-			case tokenizer.KeywordUse:
-				expr.Body = append(expr.Body, p.parseUse())
-			case tokenizer.KeywordTemplate:
-				expr.Body = append(expr.Body, p.parseTemplate())
-			default:
-				if p.isGlobalConfigToken(tok.Kind) {
-					expr.Body = append(expr.Body, p.parseGlobalConfig())
-				} else if p.isRiskConfigToken(tok.Kind) {
-					expr.Body = append(expr.Body, p.parseRiskConfig())
-				} else {
-					p.next()
-				}
-			}
-		}
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	}
-	return expr
 }
 
-func (p *parserImpl) parseTemplate() ast.ExpressionNode {
-	expr := createExpression(ast.TemplateExpression)
+func (p *Parser) parseStmt() ast.Stmt {
+	p.skipTerminators()
+	if p.isAtEnd() {
+		return nil
+	}
+
+	tok := p.cur()
+
+	// 1. 表驱动解析
+	if parseFn, ok := stmtParsers[tok.Kind]; ok {
+		return parseFn(p)
+	}
+
+	// 2. Level / Override
+	switch tok.Kind {
+	case tokenizer.KeywordProfit, tokenizer.KeywordLoss, tokenizer.KeywordPrice:
+		kind := tok.Value
+		p.next()
+		return parseLevelStmt(p, kind)
+	case tokenizer.KeywordOverride:
+		return parseOverrideStmt(p)
+	}
+
+	// 3. 配置关键字
+	if isConfigKeyword(tok.Kind) {
+		return parseConfigStmt(p)
+	}
+
+	// 4. 其他
+	switch tok.Kind {
+	case tokenizer.Identifier:
+		if p.peek(1).Kind == tokenizer.Colon {
+			return parseDefineStmt(p)
+		}
+		p.errorf("bare identifier not allowed as statement: %s", tok.Value)
+		p.next()
+		return nil
+	case tokenizer.At, tokenizer.Dollar, tokenizer.Integer, tokenizer.Float, tokenizer.String, tokenizer.Negative, tokenizer.LeftParen:
+		p.errorf("bare expression not allowed as statement")
+		p.parseExpression(precLowest)
+		return nil
+	default:
+		p.errorf("unexpected token: %v (%s)", tok.Kind, tok.Value)
+		p.next()
+		return nil
+	}
+}
+
+func isConfigKeyword(kind tokenizer.TokenKind) bool {
+	switch kind {
+	case tokenizer.KeywordKeep, tokenizer.KeywordHoldMax, tokenizer.KeywordCooldown,
+		tokenizer.KeywordSession, tokenizer.KeywordActive, tokenizer.KeywordPause,
+		tokenizer.KeywordPartialFill, tokenizer.KeywordCompoundProfit, tokenizer.KeywordSkipIfGapped,
+		tokenizer.KeywordFallback, tokenizer.KeywordPosition, tokenizer.KeywordSizing,
+		tokenizer.KeywordBasePosition, tokenizer.KeywordPyramidStep, tokenizer.KeywordMaxPyramidLayers,
+		tokenizer.KeywordFixedFraction, tokenizer.KeywordVolatilityTarget, tokenizer.KeywordAtrPeriod,
+		tokenizer.KeywordRiskPerTrade, tokenizer.KeywordRiskPerGrid, tokenizer.KeywordMaxDrawdown,
+		tokenizer.KeywordPositionDecay, tokenizer.KeywordGrossExposure, tokenizer.KeywordNetExposure,
+		tokenizer.KeywordBetaNeutral, tokenizer.KeywordRebalance, tokenizer.KeywordLeverage,
+		tokenizer.KeywordMargin, tokenizer.KeywordHedge, tokenizer.KeywordFundingPriority,
+		tokenizer.KeywordMaxShort, tokenizer.KeywordBorrowRateLimit, tokenizer.KeywordMaxPosition,
+		tokenizer.KeywordStopLoss, tokenizer.KeywordSlippageTolerance, tokenizer.KeywordCircuitBreaker,
+		tokenizer.KeywordLeg, tokenizer.KeywordSide, tokenizer.KeywordAuto, tokenizer.KeywordRatio,
+		tokenizer.KeywordTimeout, tokenizer.KeywordSlippage, tokenizer.KeywordFillMode,
+		tokenizer.KeywordIoc, tokenizer.KeywordFok, tokenizer.KeywordGtd, tokenizer.KeywordPostOnly,
+		tokenizer.KeywordBps, tokenizer.KeywordTif, tokenizer.KeywordSpot, tokenizer.KeywordFutures,
+		tokenizer.KeywordPerp, tokenizer.KeywordBetween, tokenizer.KeywordOn, tokenizer.KeywordTag,
+		tokenizer.KeywordSpread, tokenizer.KeywordBasis, tokenizer.KeywordFunding, tokenizer.KeywordLatency,
+		tokenizer.KeywordDepth:
+		return true
+	}
+	return false
+}
+
+// ---------- 各语句具体解析 ----------
+
+func parseImportStmt(p *Parser) ast.Stmt {
 	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
+	path := ""
+	if p.cur().Kind == tokenizer.String {
+		path = p.cur().Value
 		p.next()
 	}
+	p.consume(tokenizer.Semicolon)
+	p.consume(tokenizer.Terminator)
+	return &ast.ImportStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.ImportStmt}},
+		Path:     path,
+	}
+}
+
+func parseExportStmt(p *Parser) ast.Stmt {
+	p.next()
+	name := ""
+	if p.cur().Kind == tokenizer.Identifier {
+		name = p.cur().Value
+		p.next()
+	}
+	p.consume(tokenizer.Semicolon)
+	p.consume(tokenizer.Terminator)
+	return &ast.ExportStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.ExportStmt}},
+		Name:     name,
+	}
+}
+
+func parseUseStmt(p *Parser) ast.Stmt {
+	p.next()
+	name := ""
+	if p.cur().Kind == tokenizer.Identifier {
+		name = p.cur().Value
+		p.next()
+	}
+
+	args := []ast.Expr{}
 	if p.cur().Kind == tokenizer.LeftParen {
 		p.next()
-		for p.current < p.length && p.cur().Kind != tokenizer.RightParen && p.cur().Kind != tokenizer.EOF {
+		for !p.isAtEnd() && p.cur().Kind != tokenizer.RightParen {
 			if p.cur().Kind == tokenizer.Comma {
 				p.next()
 				continue
 			}
-			param := createExpression(ast.ParamExpression)
+			if arg := p.parseLiteralOrIdentifier(); arg != nil {
+				args = append(args, arg)
+			} else {
+				p.next()
+			}
+			if p.cur().Kind == tokenizer.Comma {
+				p.next()
+			}
+		}
+		if p.cur().Kind == tokenizer.RightParen {
+			p.next()
+		}
+	}
+
+	alias := ""
+	if p.cur().Kind == tokenizer.KeywordAs {
+		p.next()
+		if p.cur().Kind == tokenizer.Identifier {
+			alias = p.cur().Value
+			p.next()
+		}
+	}
+
+	p.consume(tokenizer.Semicolon)
+	p.consume(tokenizer.Terminator)
+
+	return &ast.UseStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.UseStmt}},
+		Name:     name,
+		Args:     args,
+		Alias:    alias,
+	}
+}
+
+func parseSelectStmt(p *Parser) ast.Stmt {
+	p.next()
+	target := ""
+	if p.cur().Kind == tokenizer.Identifier || tokenizer.TokenIsNumber(p.cur()) {
+		target = p.cur().Value
+		p.next()
+	}
+	p.consume(tokenizer.Semicolon)
+	p.consume(tokenizer.Terminator)
+	return &ast.SelectStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.SelectStmt}},
+		Target:   target,
+	}
+}
+
+func parseStrategyStmt(p *Parser) ast.Stmt {
+	kind := p.cur().Value
+	p.next()
+
+	target := ""
+	if p.cur().Kind == tokenizer.Identifier || tokenizer.TokenIsNumber(p.cur()) {
+		target = p.cur().Value
+		p.next()
+	}
+
+	body := []ast.Stmt{}
+	if p.expect(tokenizer.LeftBraces) {
+		p.next()
+		body = p.parseBlock(tokenizer.RightBraces)
+		if p.cur().Kind == tokenizer.RightBraces {
+			p.next()
+		}
+	}
+
+	return &ast.StrategyStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.StrategyStmt}},
+		Kind:     kind,
+		Target:   target,
+		Body:     body,
+	}
+}
+
+func parseTemplateStmt(p *Parser) ast.Stmt {
+	p.next()
+	name := ""
+	if p.cur().Kind == tokenizer.Identifier {
+		name = p.cur().Value
+		p.next()
+	}
+
+	params := []ast.ParamDef{}
+	if p.cur().Kind == tokenizer.LeftParen {
+		p.next()
+		for !p.isAtEnd() && p.cur().Kind != tokenizer.RightParen {
+			if p.cur().Kind == tokenizer.Comma {
+				p.next()
+				continue
+			}
+			param := ast.ParamDef{}
 			if p.cur().Kind == tokenizer.Identifier {
 				param.Name = p.cur().Value
 				p.next()
@@ -907,18 +682,15 @@ func (p *parserImpl) parseTemplate() ast.ExpressionNode {
 			if p.cur().Kind == tokenizer.Colon {
 				p.next()
 				if p.cur().Kind == tokenizer.Identifier {
-					param.Value = ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value}
+					param.Type = p.cur().Value
 					p.next()
 				}
 			}
 			if p.cur().Kind == tokenizer.Assign {
 				p.next()
-				if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.String || p.cur().Kind == tokenizer.Identifier {
-					param.Value = createLiteral(p.cur())
-					p.next()
-				}
+				param.Default = p.parseLiteralOrIdentifier()
 			}
-			expr.Body = append(expr.Body, param)
+			params = append(params, param)
 			if p.cur().Kind == tokenizer.Comma {
 				p.next()
 			}
@@ -927,614 +699,465 @@ func (p *parserImpl) parseTemplate() ast.ExpressionNode {
 			p.next()
 		}
 	}
+
+	extends := ""
 	if p.cur().Kind == tokenizer.KeywordExtends {
 		p.next()
 		if p.cur().Kind == tokenizer.Identifier {
-			extendsExpr := createExpression(ast.ExtendsExpression)
-			extendsExpr.Name = p.cur().Value
-			expr.Body = append([]ast.ExpressionNode{extendsExpr}, expr.Body...)
+			extends = p.cur().Value
 			p.next()
 		}
 	}
-	if p.cur().Kind == tokenizer.LeftBraces {
+
+	body := []ast.Stmt{}
+	if p.expect(tokenizer.LeftBraces) {
 		p.next()
-		for p.current < p.length && p.cur().Kind != tokenizer.RightBraces && p.cur().Kind != tokenizer.EOF {
-			p.skipTerminators()
-			if p.cur().Kind == tokenizer.RightBraces || p.cur().Kind == tokenizer.EOF {
-				break
-			}
-			tok := p.cur()
-			switch tok.Kind {
-			case tokenizer.KeywordGrid:
-				expr.Body = append(expr.Body, p.parseGrid())
-			case tokenizer.KeywordLong:
-				expr.Body = append(expr.Body, p.parseLong())
-			case tokenizer.KeywordShort:
-				expr.Body = append(expr.Body, p.parseShort())
-			case tokenizer.KeywordBoth:
-				expr.Body = append(expr.Body, p.parseBoth())
-			case tokenizer.KeywordPortfolio:
-				expr.Body = append(expr.Body, p.parsePortfolio())
-			case tokenizer.KeywordIf:
-				expr.Body = append(expr.Body, p.parseConditional())
-			case tokenizer.KeywordAssert:
-				expr.Body = append(expr.Body, p.parseAssert())
-			default:
-				if p.isGlobalConfigToken(tok.Kind) {
-					expr.Body = append(expr.Body, p.parseGlobalConfig())
-				} else {
-					p.next()
-				}
-			}
-		}
+		body = p.parseBlock(tokenizer.RightBraces)
 		if p.cur().Kind == tokenizer.RightBraces {
 			p.next()
 		}
 	}
-	return expr
+
+	return &ast.TemplateStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.TemplateStmt}},
+		Name:     name,
+		Params:   params,
+		Extends:  extends,
+		Body:     body,
+	}
 }
 
-func (p *parserImpl) parseUse() ast.ExpressionNode {
-	expr := createExpression(ast.UseExpression)
+func parseMacroStmt(p *Parser) ast.Stmt {
 	p.next()
+	name := ""
 	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
+		name = p.cur().Value
 		p.next()
 	}
-	if p.cur().Kind == tokenizer.LeftParen {
+
+	body := []ast.Stmt{}
+	if p.expect(tokenizer.LeftBraces) {
 		p.next()
-		for p.current < p.length && p.cur().Kind != tokenizer.RightParen && p.cur().Kind != tokenizer.EOF {
-			if p.cur().Kind == tokenizer.Comma {
-				p.next()
-				continue
-			}
-			if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.String || p.cur().Kind == tokenizer.Identifier {
-				expr.Params = append(expr.Params, createLiteral(p.cur()))
-				p.next()
-			} else {
-				p.next()
-			}
-			if p.cur().Kind == tokenizer.Comma {
-				p.next()
-			}
-		}
-		if p.cur().Kind == tokenizer.RightParen {
+		body = p.parseBlock(tokenizer.RightBraces)
+		if p.cur().Kind == tokenizer.RightBraces {
 			p.next()
 		}
 	}
-	if p.cur().Kind == tokenizer.KeywordAs {
+
+	return &ast.MacroStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.MacroStmt}},
+		Name:     name,
+		Body:     body,
+	}
+}
+
+func parseIfStmt(p *Parser) ast.Stmt {
+	p.next()
+	cond := p.parseExpression(precLowest)
+	body := []ast.Stmt{}
+	if p.expect(tokenizer.LeftBraces) {
 		p.next()
+		body = p.parseBlock(tokenizer.RightBraces)
+		if p.cur().Kind == tokenizer.RightBraces {
+			p.next()
+		}
+	}
+	return &ast.IfStmtNode{
+		BaseStmt:  ast.BaseStmt{Node: ast.Node{Type: ast.IfStmt}},
+		Condition: cond,
+		Body:      body,
+	}
+}
+
+func parseAssertStmt(p *Parser) ast.Stmt {
+	p.next()
+	cond := p.parseExpression(precLowest)
+	p.consume(tokenizer.Semicolon)
+	p.consume(tokenizer.Terminator)
+	return &ast.AssertStmtNode{
+		BaseStmt:  ast.BaseStmt{Node: ast.Node{Type: ast.AssertStmt}},
+		Condition: cond,
+	}
+}
+
+func parseFlowStmt(p *Parser) ast.Stmt {
+	// 可选的频次修饰符（如 once trigger ...）
+	frequency := ""
+	if isFrequencyKeyword(p.cur().Kind) {
+		frequency = p.cur().Value
+		p.next()
+	}
+
+	kind := p.cur().Value
+	p.next()
+
+	switch kind {
+	case "trigger", "until":
+		cond := p.parseExpression(precLowest)
+		body := []ast.Stmt{}
+		if p.expect(tokenizer.LeftBraces) {
+			p.next()
+			body = p.parseBlock(tokenizer.RightBraces)
+			if p.cur().Kind == tokenizer.RightBraces {
+				p.next()
+			}
+		}
+		return &ast.FlowStmtNode{
+			BaseStmt:  ast.BaseStmt{Node: ast.Node{Type: ast.FlowStmt}},
+			Kind:      kind,
+			Condition: cond,
+			Body:      body,
+			Frequency: frequency,
+		}
+	case "atomic":
+		body := []ast.Stmt{}
+		if p.expect(tokenizer.LeftBraces) {
+			p.next()
+			body = p.parseBlock(tokenizer.RightBraces)
+			if p.cur().Kind == tokenizer.RightBraces {
+				p.next()
+			}
+		}
+		mode := ""
+		if p.cur().Kind == tokenizer.KeywordRollback {
+			mode = "rollback"
+			p.next()
+		} else if p.cur().Kind == tokenizer.KeywordBestEffort {
+			mode = "best_effort"
+			p.next()
+		}
+		p.consume(tokenizer.Semicolon)
+		p.consume(tokenizer.Terminator)
+		return &ast.FlowStmtNode{
+			BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.FlowStmt}},
+			Kind:     "atomic",
+			Body:     body,
+			Mode:     mode,
+		}
+	default:
+		p.errorf("unknown flow kind: %s", kind)
+		return nil
+	}
+}
+
+func isFrequencyKeyword(kind tokenizer.TokenKind) bool {
+	switch kind {
+	case tokenizer.KeywordOnce, tokenizer.KeywordTwice, tokenizer.KeywordDaily,
+		tokenizer.KeywordWeekly, tokenizer.KeywordMonthly, tokenizer.KeywordYearly,
+		tokenizer.KeywordHourly:
+		return true
+	}
+	return false
+}
+
+func parseLevelStmt(p *Parser, levelKind string) ast.Stmt {
+	var cond ast.Expr
+
+	if r := p.parseRangeExpr(); r != nil {
+		cond = r
+	} else if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
+		cond = p.parseLiteral()
+	}
+
+	mode := levelKind
+	if p.cur().Kind == tokenizer.KeywordCross {
+		mode = levelKind + "_cross"
+		p.next()
+	}
+
+	if p.cur().Kind == tokenizer.KeywordPriority {
+		p.next()
+		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
+			p.parseLiteral() // consume priority value
+		}
+	}
+
+	body := []ast.Stmt{}
+	if p.expect(tokenizer.LeftBraces) {
+		p.next()
+		body = p.parseBlock(tokenizer.RightBraces)
+		if p.cur().Kind == tokenizer.RightBraces {
+			p.next()
+		}
+	}
+
+	return &ast.FlowStmtNode{
+		BaseStmt:  ast.BaseStmt{Node: ast.Node{Type: ast.FlowStmt}},
+		Kind:      "level",
+		Condition: cond,
+		Body:      body,
+		Mode:      mode,
+	}
+}
+
+func parseOverrideStmt(p *Parser) ast.Stmt {
+	p.next()
+
+	labels := []string{}
+	for p.cur().Kind == tokenizer.Identifier {
+		labels = append(labels, p.cur().Value)
+		p.next()
+	}
+
+	var cond ast.Expr
+	if r := p.parseRangeExpr(); r != nil {
+		cond = r
+	}
+
+	body := []ast.Stmt{}
+	if p.expect(tokenizer.LeftBraces) {
+		p.next()
+		body = p.parseBlock(tokenizer.RightBraces)
+		if p.cur().Kind == tokenizer.RightBraces {
+			p.next()
+		}
+	}
+
+	return &ast.FlowStmtNode{
+		BaseStmt:  ast.BaseStmt{Node: ast.Node{Type: ast.FlowStmt}},
+		Kind:      "override",
+		Condition: cond,
+		Body:      body,
+		Labels:    labels,
+	}
+}
+
+func isActionTerminator(tok tokenizer.Token) bool {
+	switch tok.Kind {
+	case tokenizer.Terminator, tokenizer.Semicolon, tokenizer.EOF, tokenizer.RightBraces, tokenizer.At:
+		return true
+	case tokenizer.Identifier, tokenizer.KeywordRemaining:
+		if tok.Value == "from" || tok.Value == "remaining" {
+			return true
+		}
+	}
+	return false
+}
+
+func parseActionStmt(p *Parser) ast.Stmt {
+	action := p.cur().Value
+	p.next()
+
+	args := []ast.Expr{}
+
+	// 解析 amount 表达式
+	if !p.isAtEnd() && !isActionTerminator(p.cur()) {
+		expr := p.parseExpression(precLowest)
+		if expr != nil {
+			args = append(args, expr)
+		}
+	}
+
+	// 解析后续标识符参数（如 unit）
+	for !p.isAtEnd() && !isActionTerminator(p.cur()) {
 		if p.cur().Kind == tokenizer.Identifier {
-			expr.Alias = p.cur().Value
+			args = append(args, &ast.IdentifierExprNode{
+				BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.IdentifierExpr}},
+				Name:     p.cur().Value,
+			})
 			p.next()
+		} else {
+			break
 		}
 	}
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
-		p.next()
-	}
-	return expr
-}
 
-func (p *parserImpl) parseImport() ast.ExpressionNode {
-	expr := createExpression(ast.ImportExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.String {
-		expr.Name = p.cur().Value
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
-		p.next()
-	}
-	return expr
-}
-
-func (p *parserImpl) parseExport() ast.ExpressionNode {
-	expr := createExpression(ast.ExportExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
-		p.next()
-	}
-	return expr
-}
-
-func (p *parserImpl) parseMacro() ast.ExpressionNode {
-	expr := createExpression(ast.MacroExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		expr.Body = p.parseGridBody()
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	}
-	return expr
-}
-
-func (p *parserImpl) parseConditional() ast.ExpressionNode {
-	expr := createExpression(ast.ConditionalExpression)
-	p.next()
-	left := ast.ExpressionNode{}
-	if p.cur().Kind == tokenizer.Identifier || tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.String {
-		left = ast.ExpressionNode{Node: ast.Node{Type: ast.LiteralExpression}, Value: createLiteral(p.cur())}
-		p.next()
-	} else if p.cur().Kind == tokenizer.Dollar {
-		left = p.parseVariable()
-	}
-	op := ""
-	if p.cur().Kind == tokenizer.EqualEqual || p.cur().Kind == tokenizer.NotEqual ||
-		p.cur().Kind == tokenizer.LessThan || p.cur().Kind == tokenizer.GreaterThan ||
-		p.cur().Kind == tokenizer.LessEqual || p.cur().Kind == tokenizer.GreaterEqual {
-		op = p.cur().Value
-		p.next()
-	}
-	right := ast.ExpressionNode{}
-	if p.cur().Kind == tokenizer.Identifier || tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.String {
-		right = ast.ExpressionNode{Node: ast.Node{Type: ast.LiteralExpression}, Value: createLiteral(p.cur())}
-		p.next()
-	} else if p.cur().Kind == tokenizer.Dollar {
-		right = p.parseVariable()
-	}
-	comp := createExpression(ast.ComparisonExpression)
-	comp.Operator = op
-	comp.Left = &left
-	comp.Right = &right
-	expr.Body = append(expr.Body, comp)
-	if p.cur().Kind == tokenizer.LeftBraces {
-		p.next()
-		for p.current < p.length && p.cur().Kind != tokenizer.RightBraces && p.cur().Kind != tokenizer.EOF {
-			p.skipTerminators()
-			if p.cur().Kind == tokenizer.RightBraces || p.cur().Kind == tokenizer.EOF {
-				break
-			}
-			tok := p.cur()
-			switch tok.Kind {
-			case tokenizer.KeywordGrid:
-				expr.Body = append(expr.Body, p.parseGrid())
-			case tokenizer.KeywordLong:
-				expr.Body = append(expr.Body, p.parseLong())
-			case tokenizer.KeywordShort:
-				expr.Body = append(expr.Body, p.parseShort())
-			case tokenizer.KeywordBoth:
-				expr.Body = append(expr.Body, p.parseBoth())
-			case tokenizer.KeywordPortfolio:
-				expr.Body = append(expr.Body, p.parsePortfolio())
-			default:
-				if p.isGlobalConfigToken(tok.Kind) {
-					expr.Body = append(expr.Body, p.parseGlobalConfig())
-				} else {
-					p.next()
-				}
-			}
-		}
-		if p.cur().Kind == tokenizer.RightBraces {
-			p.next()
-		}
-	}
-	return expr
-}
-
-func (p *parserImpl) parseAssert() ast.ExpressionNode {
-	expr := createExpression(ast.AssertExpression)
-	p.next()
-	left := ast.ExpressionNode{}
-	if p.cur().Kind == tokenizer.Identifier || tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.String {
-		left = ast.ExpressionNode{Node: ast.Node{Type: ast.LiteralExpression}, Value: createLiteral(p.cur())}
-		p.next()
-	} else if p.cur().Kind == tokenizer.Dollar {
-		left = p.parseVariable()
-	}
-	op := ""
-	if p.cur().Kind == tokenizer.EqualEqual || p.cur().Kind == tokenizer.NotEqual ||
-		p.cur().Kind == tokenizer.LessThan || p.cur().Kind == tokenizer.GreaterThan ||
-		p.cur().Kind == tokenizer.LessEqual || p.cur().Kind == tokenizer.GreaterEqual {
-		op = p.cur().Value
-		p.next()
-	}
-	right := ast.ExpressionNode{}
-	if p.cur().Kind == tokenizer.Identifier || tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.String {
-		right = ast.ExpressionNode{Node: ast.Node{Type: ast.LiteralExpression}, Value: createLiteral(p.cur())}
-		p.next()
-	} else if p.cur().Kind == tokenizer.Dollar {
-		right = p.parseVariable()
-	}
-	comp := createExpression(ast.ComparisonExpression)
-	comp.Operator = op
-	comp.Left = &left
-	comp.Right = &right
-	expr.Body = append(expr.Body, comp)
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
-		p.next()
-	}
-	return expr
-}
-
-func (p *parserImpl) parseBuy() ast.ExpressionNode {
-	expr := createExpression(ast.BuyExpression)
-	p.next()
+	priceType := ""
+	var price ast.Expr
 	if p.cur().Kind == tokenizer.At {
 		p.next()
 		if p.cur().Kind == tokenizer.Identifier {
-			expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.ReferenceLiteral}, Value: p.cur().Value})
-			p.next()
-		} else {
-			fmt.Println("Unexpected token after @ in buy expression")
-		}
-	} else if p.cur().Kind == tokenizer.Dollar {
-		varExpr := p.parseVariable()
-		expr.Params = append(expr.Params, ast.Literal{Node: ast.Node{Type: ast.ReferenceLiteral}, Value: varExpr.Name})
-	} else if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-		expr.Params = append(expr.Params, p.parseLiteral())
-	} else {
-		fmt.Println("Unexpected token in buy expression")
-	}
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
-		p.next()
-	}
-	return expr
-}
-
-func (p *parserImpl) parseSell() ast.ExpressionNode {
-	expr := createExpression(ast.SellExpression)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.Plus {
-		p.next()
-	}
-	if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-		expr.Params = append(expr.Params, p.parseLiteral())
-	} else {
-		fmt.Println("Unexpected token in sell expression")
-	}
-	if p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon {
-		p.next()
-	}
-	return expr
-}
-
-func (p *parserImpl) parseKeep() ast.ExpressionNode {
-	expr := createExpression(ast.KeepExpression)
-	p.next()
-	for p.current < p.length {
-		k := p.cur().Kind
-		if k == tokenizer.Terminator || k == tokenizer.Semicolon || k == tokenizer.EOF {
-			break
-		}
-		dur := p.parseDuration()
-		if dur.Node.Type != ast.DurationLiteral {
-			break
-		}
-		expr.Params = append(expr.Params, dur)
-	}
-	return expr
-}
-
-func (p *parserImpl) parseStop() ast.ExpressionNode {
-	expr := createExpression(ast.StopExpression)
-	cache := make([]ast.Literal, 0)
-	p.next()
-	for p.current < p.length {
-		k := p.cur().Kind
-		if k == tokenizer.Terminator || k == tokenizer.Semicolon || k == tokenizer.EOF {
-			break
-		}
-		switch k {
-		case tokenizer.Float, tokenizer.Integer:
-			cache = append(cache, p.parseLiteral())
-			if p.current >= p.length || p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon || p.cur().Kind == tokenizer.EOF {
-				expr.Params = append(expr.Params, cache...)
-				cache = nil
-			}
-		case tokenizer.TribleDot, tokenizer.Range:
-			r := createRange()
-			if len(cache) >= 1 {
-				r.Begin = cache[len(cache)-1]
-				cache = cache[:len(cache)-1]
-			}
-			p.next() // consume …/...
-			if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-				r.End = p.parseLiteral()
-			}
-			if r.Begin.Node.Type != 0 && r.End.Node.Type != 0 && r.Begin.Unit != r.End.Unit {
-				fmt.Printf("Inconsistent units: %s -> %s\n", r.Begin.Unit, r.End.Unit)
-				continue
-			}
-			expr.Range = &r
-		case tokenizer.Negative:
-			if tokenizer.TokenIsNumber(p.peek(1)) {
-				cache = append(cache, p.parseLiteral())
-				if p.current >= p.length || p.cur().Kind == tokenizer.Terminator || p.cur().Kind == tokenizer.Semicolon || p.cur().Kind == tokenizer.EOF {
-					expr.Params = append(expr.Params, cache...)
-					cache = nil
-				}
-			} else {
-				if len(cache) != 0 {
-					expr.Params = append(expr.Params, cache...)
-					cache = nil
-				}
+			if p.cur().Value == "market" {
+				priceType = "market"
 				p.next()
+			} else if p.cur().Value == "limit" {
+				priceType = "limit"
+				p.next()
+				if !p.isAtEnd() && !isActionTerminator(p.cur()) {
+					price = p.parseExpression(precLowest)
+				}
 			}
-		default:
-			if len(cache) != 0 {
-				expr.Params = append(expr.Params, cache...)
-				cache = nil
-			}
+		}
+	}
+
+	modifier := ""
+	if p.cur().Value == "from" {
+		p.next()
+		if p.cur().Kind == tokenizer.Identifier {
+			modifier = "from_" + p.cur().Value
 			p.next()
 		}
+	} else if p.cur().Value == "remaining" {
+		modifier = "remaining"
+		p.next()
 	}
-	if len(cache) != 0 {
-		expr.Params = append(expr.Params, cache...)
+
+	p.consume(tokenizer.Semicolon)
+	p.consume(tokenizer.Terminator)
+
+	return &ast.ActionStmtNode{
+		BaseStmt:  ast.BaseStmt{Node: ast.Node{Type: ast.ActionStmt}},
+		Action:    action,
+		Args:      args,
+		Price:     price,
+		PriceType: priceType,
+		Modifier:  modifier,
 	}
-	return expr
 }
 
-func (p *parserImpl) parseSelect() ast.ExpressionNode {
-	expr := createExpression(ast.SelectExpression)
+// isDurationKey 判断配置项是否支持 duration 序列（如 keep 1d 2h 3min）
+func isDurationKey(key string) bool {
+	switch key {
+	case "keep", "hold_max", "cooldown", "position_decay", "circuit_breaker":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseConfigStmt(p *Parser) ast.Stmt {
+	key := p.cur().Value
 	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	} else {
-		fmt.Println("Expected identifier after 'select'")
-	}
-	return expr
-}
 
-func (p *parserImpl) parseValue() ast.ExpressionNode {
-	expr := createExpression(ast.ValueStatement)
-	p.next()
-	if p.cur().Kind == tokenizer.Colon {
-		p.next()
-	}
-	if p.cur().Kind == tokenizer.Text {
-		expr.Value = createLiteral(p.cur())
-		p.next()
-	} else if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-		if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-			expr.Value = p.parseLiteral()
-		}
-	} else if tokenizer.TokenIsNumber(p.cur()) || p.cur().Kind == tokenizer.Negative {
-		expr.Value = p.parseLiteral()
-	}
-	return expr
-}
+	params := []ast.Expr{}
+	var rng *ast.RangeExprNode
+	durationKey := isDurationKey(key)
 
-func (p *parserImpl) parseDefine() ast.ExpressionNode {
-	expr := createExpression(ast.DefineStatement)
-	name := p.cur()
-	p.next()
-	if p.cur().Kind != tokenizer.Colon {
-		return expr
-	}
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier || tokenizer.IsLiteral(p.cur()) {
-		expr.Name = name.Value
-		if tokenizer.IsLiteral(p.cur()) {
-			expr.Value = createLiteral(p.cur())
-		} else {
-			expr.Value = ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value}
-		}
-		p.next()
-	}
-	return expr
-}
-
-func (p *parserImpl) parseReference() ast.ExpressionNode {
-	expr := createExpression(ast.ReferenceStatement)
-	p.next()
-	if p.cur().Kind == tokenizer.Identifier {
-		expr.Name = p.cur().Value
-		p.next()
-	} else {
-		fmt.Println("Invalid reference, expected identifier after @")
-	}
-	return expr
-}
-
-func (p *parserImpl) parseVariable() ast.ExpressionNode {
-	expr := createExpression(ast.VariableExpression)
-	p.next() // consume $
-	if p.cur().Kind == tokenizer.Identifier || p.cur().Kind.IsKeyword() {
-		expr.Name = p.cur().Value
-		p.next()
-	} else {
-		fmt.Println("Invalid variable, expected identifier after $")
-	}
-	return expr
-}
-
-func (p *parserImpl) parseAnnotationComment() ast.ExpressionNode {
-	expr := createExpression(ast.AnnotationExpression)
-	parts := strings.SplitN(p.cur().Value, "|", 2)
-	if len(parts) == 2 {
-		expr.Name = parts[0]
-		expr.Value = ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: parts[1]}
-	} else {
-		expr.Value = ast.Literal{Node: ast.Node{Type: ast.TextLiteral}, Value: p.cur().Value}
-	}
-	p.next()
-	return expr
-}
-
-// Parse 主解析入口
-func (p *parserImpl) Parse() ast.RootNode {
-	root := createRoot()
-	for p.current < p.length {
-		p.skipTerminators()
+	for !p.isAtEnd() {
 		tok := p.cur()
-		if tok.Kind == tokenizer.EOF {
+		if tok.Kind == tokenizer.Semicolon || tok.Kind == tokenizer.Terminator || tok.Kind == tokenizer.EOF || tok.Kind == tokenizer.RightBraces {
 			break
 		}
-		var expr ast.ExpressionNode
-		switch tok.Kind {
-		case tokenizer.KeywordBuy:
-			expr = p.parseBuy()
-		case tokenizer.KeywordSell:
-			expr = p.parseSell()
-		case tokenizer.KeywordKeep:
-			expr = p.parseKeep()
-		case tokenizer.KeywordStop:
-			expr = p.parseStop()
-		case tokenizer.KeywordSelect:
-			expr = p.parseSelect()
-		case tokenizer.KeywordValue:
-			expr = p.parseValue()
-		case tokenizer.KeywordGrid:
-			expr = p.parseGrid()
-		case tokenizer.KeywordLong:
-			expr = p.parseLong()
-		case tokenizer.KeywordShort:
-			expr = p.parseShort()
-		case tokenizer.KeywordBoth:
-			expr = p.parseBoth()
-		case tokenizer.KeywordPortfolio:
-			expr = p.parsePortfolio()
-		case tokenizer.KeywordTemplate:
-			expr = p.parseTemplate()
-		case tokenizer.KeywordUse:
-			expr = p.parseUse()
-		case tokenizer.KeywordImport:
-			expr = p.parseImport()
-		case tokenizer.KeywordExport:
-			expr = p.parseExport()
-		case tokenizer.KeywordMacro:
-			expr = p.parseMacro()
-		case tokenizer.KeywordIf:
-			expr = p.parseConditional()
-		case tokenizer.KeywordAssert:
-			expr = p.parseAssert()
-		case tokenizer.KeywordHoldMax:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordCooldown:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordSession:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordActive:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordPause:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordPartialFill:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordCompoundProfit:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordSkipIfGapped:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordFallback:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordPosition:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordSizing:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordBasePosition:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordPyramidStep:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordMaxPyramidLayers:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordFixedFraction:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordVolatilityTarget:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordAtrPeriod:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordRiskPerTrade:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordRiskPerGrid:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordMaxDrawdown:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordPositionDecay:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordGrossExposure:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordNetExposure:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordBetaNeutral:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordRebalance:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordLeverage:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordMargin:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordHedge:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordFundingPriority:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordMaxShort:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordBorrowRateLimit:
-			expr = p.parseGlobalConfig()
-		case tokenizer.KeywordMaxPosition:
-			expr = p.parseRiskConfig()
-		case tokenizer.KeywordStopLoss:
-			expr = p.parseRiskConfig()
-		case tokenizer.KeywordSlippageTolerance:
-			expr = p.parseRiskConfig()
-		case tokenizer.KeywordCircuitBreaker:
-			expr = p.parseRiskConfig()
-		case tokenizer.KeywordSellShort:
-			expr = p.parseActionStmt()
-		case tokenizer.KeywordBuyCover:
-			expr = p.parseActionStmt()
-		case tokenizer.AnnotationComment:
-			expr = p.parseAnnotationComment()
-		case tokenizer.Identifier:
-			if p.peek(1).Kind == tokenizer.Colon {
-				expr = p.parseDefine()
-			} else {
-				expr = createExpression(ast.ReferenceStatement)
-				expr.Name = tok.Value
-				p.next()
-			}
-		case tokenizer.At:
-			expr = p.parseReference()
-		case tokenizer.Dollar:
-			expr = p.parseVariable()
-		case tokenizer.Float, tokenizer.Integer:
-			expr = createExpression(ast.LiteralExpression)
-			expr.Params = append(expr.Params, p.parseLiteral())
-		case tokenizer.Colon:
-			p.next()
-			if tokenizer.IsLiteral(p.cur()) {
-				expr = createExpression(ast.DefineStatement)
-				expr.Value = createLiteral(p.cur())
-				p.next()
-			}
-		case tokenizer.Negative:
-			if !tokenizer.TokenIsNumber(p.peek(1)) {
-				fmt.Println("Unexpected token after '-'")
-				p.next()
+
+		// 尝试范围表达式
+		if r := p.parseRangeExpr(); r != nil {
+			rng = r
+			continue
+		}
+
+		// 尝试字面量（数字、负号、时间、日期）
+		if tokenizer.TokenIsNumber(tok) || tok.Kind == tokenizer.Negative || tok.Kind == tokenizer.Time || tok.Kind == tokenizer.Date {
+			lit := p.parseLiteral()
+			if lit == nil {
 				continue
 			}
-			p.next()
-			lit := p.parseLiteral()
-			lit.Value = "-" + lit.Value
-			expr = createExpression(ast.LiteralExpression)
-			expr.Params = append(expr.Params, lit)
-		default:
-			fmt.Printf("Unknown token kind: %v, value: %s\n", tok.Kind, tok.Value)
+			// duration 配置项：连续的数字+时间单位 聚合成 ListLiteralNode
+			if durationKey && lit.Unit != "" && tokenizer.IsTimeUnit(lit.Unit) {
+				items := []ast.Expr{lit}
+				for !p.isAtEnd() {
+					t := p.cur()
+					if t.Kind == tokenizer.Semicolon || t.Kind == tokenizer.Terminator || t.Kind == tokenizer.EOF || t.Kind == tokenizer.RightBraces {
+						break
+					}
+					if !tokenizer.TokenIsNumber(t) && t.Kind != tokenizer.Negative {
+						break
+					}
+					nextLit := p.parseLiteral()
+					if nextLit == nil || nextLit.Unit == "" || !tokenizer.IsTimeUnit(nextLit.Unit) {
+						break
+					}
+					items = append(items, nextLit)
+				}
+				params = append(params, &ast.ListLiteralNode{
+					BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.ListExpr}},
+					Items:    items,
+				})
+				continue
+			}
+			params = append(params, lit)
+			continue
+		}
+
+		// 标识符/关键字作为值
+		if tok.Kind == tokenizer.Identifier || tok.Kind.IsKeyword() {
+			if tok.Kind == tokenizer.KeywordRollback || tok.Kind == tokenizer.KeywordBestEffort {
+				break
+			}
+			params = append(params, &ast.IdentifierExprNode{
+				BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.IdentifierExpr}},
+				Name:     tok.Value,
+			})
 			p.next()
 			continue
 		}
-		root.Expression = append(root.Expression, expr)
+
+		// 字符串
+		if tok.Kind == tokenizer.String {
+			params = append(params, &ast.Literal{
+				BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.LiteralExpr}},
+				Value:    tok.Value,
+			})
+			p.next()
+			continue
+		}
+
+		// 变量
+		if tok.Kind == tokenizer.Dollar {
+			params = append(params, parseVariablePrefix(p))
+			continue
+		}
+
+		// 其他 token 跳过
+		p.next()
 	}
-	return root
+
+	p.consume(tokenizer.Semicolon)
+	p.consume(tokenizer.Terminator)
+
+	return &ast.ConfigStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.ConfigStmt}},
+		Key:      key,
+		Params:   params,
+		Range:    rng,
+	}
 }
 
-// Parser 包级入口函数
-func Parser(tokens []tokenizer.Token) ast.RootNode {
-	return NewParser(tokens).Parse()
+func parseAnnotationStmt(p *Parser) ast.Stmt {
+	parts := strings.SplitN(p.cur().Value, "|", 2)
+	p.next()
+
+	key := ""
+	val := ""
+	if len(parts) == 2 {
+		key = parts[0]
+		val = parts[1]
+	} else {
+		val = parts[0]
+	}
+
+	return &ast.AnnotationStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.AnnotationStmt}},
+		Key:      key,
+		Value:    val,
+	}
+}
+
+func parseDefineStmt(p *Parser) ast.Stmt {
+	name := p.cur().Value
+	p.next() // consume identifier
+	p.next() // consume :
+
+	var value ast.Expr
+	if tokenizer.IsLiteral(p.cur()) || p.cur().Kind == tokenizer.Identifier {
+		if tokenizer.IsLiteral(p.cur()) {
+			value = p.parseLiteral()
+		} else {
+			value = &ast.IdentifierExprNode{
+				BaseExpr: ast.BaseExpr{Node: ast.Node{Type: ast.IdentifierExpr}},
+				Name:     p.cur().Value,
+			}
+			p.next()
+		}
+	} else if p.cur().Kind == tokenizer.Dollar {
+		value = parseVariablePrefix(p)
+	} else if p.cur().Kind == tokenizer.At {
+		value = parseReferencePrefix(p)
+	} else {
+		p.errorf("expected value after ':' in define statement")
+	}
+
+	return &ast.DefineStmtNode{
+		BaseStmt: ast.BaseStmt{Node: ast.Node{Type: ast.DefineStmt}},
+		Name:     name,
+		Value:    value,
+	}
 }

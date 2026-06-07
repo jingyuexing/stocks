@@ -5,431 +5,375 @@ import (
 	"strconv"
 )
 
+// NodeType 表示 AST 节点的通用类型，
+// 仅保留语法结构类型，不再为每个业务关键字单独定义类型。
 type NodeType uint
 
+type LiteralType uint
+
 const (
-	// the start of program
+	Float LiteralType = iota
+	Integer
+	Text
+	Date
+	Time
+	Enum
+	List
+)
+
+const (
 	Program NodeType = iota + 1
 
-	FloatLiteral
-	IntegerLiteral
-	TextLiteral
-	DurationLiteral
-	PercentLiteral
-	ReferenceLiteral
-	LiteralExpression
+	// 语句类型（Stmt）
+	StrategyStmt // grid, long, short, both, portfolio, arbitrage
+	BlockStmt    // { ... }
+	FlowStmt     // level, trigger, until, atomic
+	ActionStmt   // buy, sell, sell_short, buy_cover
+	ConfigStmt   // 所有 key value... ; 形式的配置
+	ImportStmt
+	ExportStmt
+	UseStmt
+	TemplateStmt
+	MacroStmt
+	IfStmt
+	AssertStmt
+	AnnotationStmt
+	DefineStmt // identifier: value
+	SelectStmt
 
-	// 买入
-	BuyExpression
-	// 卖出
-	SellExpression
-	// 持有
-	KeepExpression
-	// 止于某时或某值
-	StopExpression
+	// 表达式类型（Expr）
+	LiteralExpr
+	BinaryExpr
+	UnaryExpr
+	RangeExpr
+	VariableExpr
+	ReferenceExpr
+	MacroExpandExpr
+	CallExpr
+	IdentifierExpr
+	ListExpr
 
-	SwapExpression
-
-	RangeExpression
-	// 定义 bar: name
-	DefineStatement
-	// Reference 引用
-	ReferenceStatement
-	// Variable 变量（如 $profit, $price）
-	VariableExpression
-
-	// Select 选择股票代码
-	SelectExpression
-
-	// Grid 网格交易
-	GridExpression
-	// Loss 亏损分支
-	LossExpression
-	// Profit 盈利分支
-	ProfitExpression
-	// Value 资金配置
-	ValueStatement
-
-	// a year
-	YearUnit
-	// a month
-	MonthUnit
-	// day
-	DayUnit
-	///
-	WeekUnit
-	///  hour
-	HourUnit
-	// min
-	MinuteUnit
-	// second
-	SecondUnit
-	// milion second
-	MillisecondUnit
-
-	// ========== v2.1 新增 ==========
-	// 策略声明
-	LongExpression
-	ShortExpression
-	BothExpression
-	PortfolioExpression
-	TemplateExpression
-	UseExpression
-	ImportExpression
-	ExportExpression
-	MacroExpression
-	ExtendsExpression
-	ParamExpression
-	ConditionalExpression
-	AssertExpression
-
-	// 范围与优先级
-	CrossExpression
-	PriorityExpression
-	OverrideExpression
-
-	// 时间控制
-	HoldMaxExpression
-	CooldownExpression
-	SessionExpression
-	ActiveExpression
-	PauseExpression
-
-	// 交易动作
-	SellShortExpression
-	BuyCoverExpression
-
-	// 头寸管理
-	PositionExpression
-	SizingExpression
-	BasePositionExpression
-	PyramidStepExpression
-	MaxPyramidLayersExpression
-	FixedFractionExpression
-	VolatilityTargetExpression
-	AtrPeriodExpression
-	RiskPerTradeExpression
-	RiskPerGridExpression
-	MaxDrawdownExpression
-	PositionDecayExpression
-	GrossExposureExpression
-	NetExposureExpression
-	BetaNeutralExpression
-	RebalanceExpression
-
-	// 杠杆与保证金
-	LeverageExpression
-	MarginExpression
-	HedgeExpression
-	FundingPriorityExpression
-	MaxShortExpression
-	BorrowRateLimitExpression
-
-	// 风控
-	MaxPositionExpression
-	StopLossExpression
-	SlippageToleranceExpression
-	PartialFillExpression
-	CircuitBreakerExpression
-
-	// 执行偏好
-	CompoundProfitExpression
-	SkipIfGappedExpression
-	FallbackExpression
-
-	// 新字面量
-	StringLiteral
-	BooleanLiteral
-	SymbolLiteral
-	TimePointLiteral
-	DateLiteral
-	DateRangeLiteral
-	SessionRangeLiteral
-
-	// 表达式
-	ArithExpression
-	ComparisonExpression
-	LogicalExpression
-	MacroExpandExpression
-
-	// 组合配置
-	PortfolioHeatExpression
-	CorrelationLimitExpression
-
-	// 文档注释 (通用)
-	AnnotationExpression
-
-	// unknow node
 	Unknown
 )
 
 func (t NodeType) String() string {
 	switch t {
-	case FloatLiteral:
-		return "FloatLiteral"
-	case IntegerLiteral:
-		return "IntegerLiteral"
-	case TextLiteral:
-		return "TextLiteral"
-	case BuyExpression:
-		return "BuyExpression"
-	case SellExpression:
-		return "SellExpression"
-	case KeepExpression:
-		return "KeepExpression"
-	case StopExpression:
-		return "StopExpression"
-	case RangeExpression:
-		return "RangeExpression"
-	case DefineStatement:
-		return "DefineStatement"
-	case ReferenceStatement:
-		return "ReferenceStatement"
-	case VariableExpression:
-		return "VariableExpression"
-	case LiteralExpression:
-		return "LiteralExpression"
-	case SelectExpression:
-		return "SelectExpression"
-	case GridExpression:
-		return "GridExpression"
-	case LossExpression:
-		return "LossExpression"
-	case ProfitExpression:
-		return "ProfitExpression"
-	case ValueStatement:
-		return "ValueStatement"
-	case YearUnit:
-		return "YearUnit"
-	case MonthUnit:
-		return "MonthUnit"
-	case DayUnit:
-		return "DayUnit"
-	case HourUnit:
-		return "HourUnit"
-	case MinuteUnit:
-		return "MinuteUnit"
-	case SecondUnit:
-		return "SecondUnit"
-	case DurationLiteral:
-		return "DurationLiteral"
-	case MillisecondUnit:
-		return "MillisecondUnit"
-	case WeekUnit:
-		return "WeekUnit"
-	// v2.1
-	case LongExpression:
-		return "LongExpression"
-	case ShortExpression:
-		return "ShortExpression"
-	case BothExpression:
-		return "BothExpression"
-	case PortfolioExpression:
-		return "PortfolioExpression"
-	case TemplateExpression:
-		return "TemplateExpression"
-	case UseExpression:
-		return "UseExpression"
-	case ImportExpression:
-		return "ImportExpression"
-	case ExportExpression:
-		return "ExportExpression"
-	case MacroExpression:
-		return "MacroExpression"
-	case ExtendsExpression:
-		return "ExtendsExpression"
-	case ParamExpression:
-		return "ParamExpression"
-	case ConditionalExpression:
-		return "ConditionalExpression"
-	case AssertExpression:
-		return "AssertExpression"
-	case CrossExpression:
-		return "CrossExpression"
-	case PriorityExpression:
-		return "PriorityExpression"
-	case OverrideExpression:
-		return "OverrideExpression"
-	case HoldMaxExpression:
-		return "HoldMaxExpression"
-	case CooldownExpression:
-		return "CooldownExpression"
-	case SessionExpression:
-		return "SessionExpression"
-	case ActiveExpression:
-		return "ActiveExpression"
-	case PauseExpression:
-		return "PauseExpression"
-	case SellShortExpression:
-		return "SellShortExpression"
-	case BuyCoverExpression:
-		return "BuyCoverExpression"
-	case PositionExpression:
-		return "PositionExpression"
-	case SizingExpression:
-		return "SizingExpression"
-	case BasePositionExpression:
-		return "BasePositionExpression"
-	case PyramidStepExpression:
-		return "PyramidStepExpression"
-	case MaxPyramidLayersExpression:
-		return "MaxPyramidLayersExpression"
-	case FixedFractionExpression:
-		return "FixedFractionExpression"
-	case VolatilityTargetExpression:
-		return "VolatilityTargetExpression"
-	case AtrPeriodExpression:
-		return "AtrPeriodExpression"
-	case RiskPerTradeExpression:
-		return "RiskPerTradeExpression"
-	case RiskPerGridExpression:
-		return "RiskPerGridExpression"
-	case MaxDrawdownExpression:
-		return "MaxDrawdownExpression"
-	case PositionDecayExpression:
-		return "PositionDecayExpression"
-	case GrossExposureExpression:
-		return "GrossExposureExpression"
-	case NetExposureExpression:
-		return "NetExposureExpression"
-	case BetaNeutralExpression:
-		return "BetaNeutralExpression"
-	case RebalanceExpression:
-		return "RebalanceExpression"
-	case LeverageExpression:
-		return "LeverageExpression"
-	case MarginExpression:
-		return "MarginExpression"
-	case HedgeExpression:
-		return "HedgeExpression"
-	case FundingPriorityExpression:
-		return "FundingPriorityExpression"
-	case MaxShortExpression:
-		return "MaxShortExpression"
-	case BorrowRateLimitExpression:
-		return "BorrowRateLimitExpression"
-	case MaxPositionExpression:
-		return "MaxPositionExpression"
-	case StopLossExpression:
-		return "StopLossExpression"
-	case SlippageToleranceExpression:
-		return "SlippageToleranceExpression"
-	case PartialFillExpression:
-		return "PartialFillExpression"
-	case CircuitBreakerExpression:
-		return "CircuitBreakerExpression"
-	case CompoundProfitExpression:
-		return "CompoundProfitExpression"
-	case SkipIfGappedExpression:
-		return "SkipIfGappedExpression"
-	case FallbackExpression:
-		return "FallbackExpression"
-	case StringLiteral:
-		return "StringLiteral"
-	case BooleanLiteral:
-		return "BooleanLiteral"
-	case SymbolLiteral:
-		return "SymbolLiteral"
-	case TimePointLiteral:
-		return "TimePointLiteral"
-	case DateLiteral:
-		return "DateLiteral"
-	case DateRangeLiteral:
-		return "DateRangeLiteral"
-	case SessionRangeLiteral:
-		return "SessionRangeLiteral"
-	case ArithExpression:
-		return "ArithExpression"
-	case ComparisonExpression:
-		return "ComparisonExpression"
-	case LogicalExpression:
-		return "LogicalExpression"
-	case MacroExpandExpression:
-		return "MacroExpandExpression"
-	case PortfolioHeatExpression:
-		return "PortfolioHeatExpression"
-	case CorrelationLimitExpression:
-		return "CorrelationLimitExpression"
-	case AnnotationExpression:
-		return "AnnotationExpression"
+	case Program:
+		return "Program"
+	case StrategyStmt:
+		return "StrategyStmt"
+	case BlockStmt:
+		return "BlockStmt"
+	case FlowStmt:
+		return "FlowStmt"
+	case ActionStmt:
+		return "ActionStmt"
+	case ConfigStmt:
+		return "ConfigStmt"
+	case ImportStmt:
+		return "ImportStmt"
+	case ExportStmt:
+		return "ExportStmt"
+	case UseStmt:
+		return "UseStmt"
+	case TemplateStmt:
+		return "TemplateStmt"
+	case MacroStmt:
+		return "MacroStmt"
+	case IfStmt:
+		return "IfStmt"
+	case AssertStmt:
+		return "AssertStmt"
+	case AnnotationStmt:
+		return "AnnotationStmt"
+	case DefineStmt:
+		return "DefineStmt"
+	case SelectStmt:
+		return "SelectStmt"
+	case LiteralExpr:
+		return "LiteralExpr"
+	case BinaryExpr:
+		return "BinaryExpr"
+	case UnaryExpr:
+		return "UnaryExpr"
+	case RangeExpr:
+		return "RangeExpr"
+	case VariableExpr:
+		return "VariableExpr"
+	case ReferenceExpr:
+		return "ReferenceExpr"
+	case MacroExpandExpr:
+		return "MacroExpandExpr"
+	case CallExpr:
+		return "CallExpr"
+	case IdentifierExpr:
+		return "IdentifierExpr"
+	case ListExpr:
+		return "ListExpr"
 	default:
-		return "unknown"
+		return "Unknown"
 	}
 }
 
+// Position 源码位置信息
+type Position struct {
+	Line   int
+	Column int
+}
+
+// Node 是所有 AST 节点的基类
 type Node struct {
 	Type NodeType
+	Pos  Position
 }
 
+// Expr 表达式接口
+type Expr interface {
+	exprNode()
+}
+
+// Stmt 语句接口
+type Stmt interface {
+	stmtNode()
+}
+
+// BaseExpr 表达式基类
+type BaseExpr struct {
+	Node
+}
+
+func (BaseExpr) exprNode() {}
+
+// BaseStmt 语句基类
+type BaseStmt struct {
+	Node
+}
+
+func (BaseStmt) stmtNode() {}
+
+// ---------- 表达式节点 ----------
+
+// Literal 字面量：数字、字符串、标识符、时间单位、百分比等
 type Literal struct {
-	Node
-	Value string
-	Unit  string
+	BaseExpr
+	LiteralType
+	Value string // 原始值
+	Unit  string // 单位：%, ns, us, ms, s, min, h, d, w 等
 }
 
-type RangeExpressionNode struct {
-	Node
-	Begin Literal
-	End   Literal
-}
-
-type ExpressionNode struct {
-	Node
-	Name string
-	// 关键字后面的数据视为参数
-	Params []Literal
-	// 范围
-	Range *RangeExpressionNode
-
-	// value 定义的值
-	Value Literal
-
-	// Body 用于块级表达式（如 grid、loss、profit）
-	Body []ExpressionNode
-
-	// v2.1 扩展字段
-	// Alias 用于 use ... as alias
-	Alias string
-	// Operator 用于算术/比较/逻辑表达式
-	Operator string
-	// Left / Right 用于二元表达式（复用 Body 也可，但独立字段更清晰）
-	Left  *ExpressionNode
-	Right *ExpressionNode
-}
-
-type RootNode struct {
-	Node
-	Expression []ExpressionNode
-}
-
-func (literal Literal) String() string {
-	switch literal.Type {
-	case FloatLiteral:
-		if literal.Unit == "%" {
-			value, _ := strconv.ParseFloat(literal.Value, 64)
-			return fmt.Sprintf("%f", value/100)
-		}
-		return literal.Value
-	case IntegerLiteral:
-		return literal.Value
-	default:
-		return ""
+func (l Literal) String() string {
+	if l.Unit == "%" {
+		v, _ := strconv.ParseFloat(l.Value, 64)
+		return fmt.Sprintf("%f", v/100)
 	}
+	return l.Value
 }
 
-// AsFloat 将字面量解析为 float64
-func (literal Literal) AsFloat() float64 {
-	v, _ := strconv.ParseFloat(literal.Value, 64)
+func (l Literal) AsFloat() float64 {
+	v, _ := strconv.ParseFloat(l.Value, 64)
 	return v
 }
 
-// AsInt 将字面量解析为 int
-func (literal Literal) AsInt() int {
-	v, _ := strconv.Atoi(literal.Value)
+func (l Literal) AsInt() int {
+	v, _ := strconv.Atoi(l.Value)
 	return v
 }
 
-// AsBool 将字面量解析为 bool
-func (literal Literal) AsBool() bool {
-	return literal.Value == "true"
+func (l Literal) AsBool() bool {
+	return l.Value == "true"
 }
+
+// RangeExprNode 范围表达式：begin…end / begin...end / …end / begin…
+type RangeExprNode struct {
+	BaseExpr
+	Begin *Literal
+	End   *Literal
+}
+
+// BinaryExprNode 二元表达式：left op right
+type BinaryExprNode struct {
+	BaseExpr
+	Op    string // +, -, *, /, ==, !=, <, >, <=, >=, &&, ||
+	Left  Expr
+	Right Expr
+}
+
+// UnaryExprNode 一元表达式：op expr
+type UnaryExprNode struct {
+	BaseExpr
+	Op   string // -, !
+	Expr Expr
+}
+
+// VariableExprNode 变量表达式：$name
+type VariableExprNode struct {
+	BaseExpr
+	Name string
+}
+
+// ReferenceExprNode 引用表达式：@name
+type ReferenceExprNode struct {
+	BaseExpr
+	Name string
+}
+
+// MacroExpandExprNode 宏展开表达式：${name}
+type MacroExpandExprNode struct {
+	BaseExpr
+	Name string
+}
+
+// CallExprNode 调用表达式：callee(arg1, arg2, ...)
+type CallExprNode struct {
+	BaseExpr
+	Callee string
+	Args   []Expr
+}
+
+// IdentifierExprNode 裸标识符表达式
+type IdentifierExprNode struct {
+	BaseExpr
+	Name string
+}
+
+// ListLiteralNode 列表字面量：用于聚合连续的 duration 字面量等
+type ListLiteralNode struct {
+	BaseExpr
+	Items []Expr
+}
+
+// ---------- 语句节点 ----------
+
+// StrategyStmtNode 策略语句：grid/long/short/both/portfolio/arbitrage TARGET { BODY }
+type StrategyStmtNode struct {
+	BaseStmt
+	Kind   string // "grid", "long", "short", "both", "portfolio", "arbitrage"
+	Target string // 标的代码或标识符
+	Body   []Stmt
+}
+
+// BlockStmtNode 块语句：{ STATEMENTS... }
+type BlockStmtNode struct {
+	BaseStmt
+	Statements []Stmt
+}
+
+// FlowStmtNode 流程控制语句：
+//
+//	level CONDITION { BODY }
+//	[once|twice|daily|weekly|monthly|yearly|hourly] trigger CONDITION { BODY }
+//	until CONDITION { BODY }
+//	atomic { BODY } [rollback|best_effort];
+//	override LABEL+ RANGE { BODY }
+type FlowStmtNode struct {
+	BaseStmt
+	Kind      string // "level", "trigger", "until", "atomic", "override"
+	Condition Expr   // level 为 RangeExpr/LiteralExpr，trigger/until 为 BinaryExpr/VariableExpr
+	Body      []Stmt
+	Mode      string   // rollback, best_effort（仅 atomic）；profit, loss, price（仅 level）
+	Labels    []string // 仅 override：标识符列表
+	Frequency string   // 仅 trigger：once, twice, daily, weekly, monthly, yearly, hourly
+}
+
+// ActionStmtNode 动作语句：ACTION ARGS... [@ market|limit EXPR] [from oldest|newest|remaining] ;
+type ActionStmtNode struct {
+	BaseStmt
+	Action    string // "buy", "sell", "sell_short", "buy_cover"
+	Args      []Expr
+	Price     Expr   // 可选
+	PriceType string // "market", "limit", ""
+	Modifier  string // "from_oldest", "from_newest", "remaining", ""
+}
+
+// ConfigStmtNode 通用配置语句：KEY VALUE... ;
+type ConfigStmtNode struct {
+	BaseStmt
+	Key    string
+	Params []Expr
+	Range  *RangeExprNode
+}
+
+// ImportStmtNode 导入语句：import "PATH" ;
+type ImportStmtNode struct {
+	BaseStmt
+	Path string
+}
+
+// ExportStmtNode 导出语句：export NAME ;
+type ExportStmtNode struct {
+	BaseStmt
+	Name string
+}
+
+// UseStmtNode 使用语句：use NAME(ARGS...) as ALIAS ;
+type UseStmtNode struct {
+	BaseStmt
+	Name  string
+	Args  []Expr
+	Alias string
+}
+
+// ParamDef 模板参数定义
+type ParamDef struct {
+	Name    string
+	Type    string
+	Default Expr
+}
+
+// TemplateStmtNode 模板定义：template NAME(PARAMS...) extends PARENT { BODY }
+type TemplateStmtNode struct {
+	BaseStmt
+	Name    string
+	Params  []ParamDef
+	Extends string
+	Body    []Stmt
+}
+
+// MacroStmtNode 宏定义：macro NAME { BODY }
+type MacroStmtNode struct {
+	BaseStmt
+	Name string
+	Body []Stmt
+}
+
+// IfStmtNode 条件语句：if CONDITION { BODY }
+type IfStmtNode struct {
+	BaseStmt
+	Condition Expr
+	Body      []Stmt
+}
+
+// AssertStmtNode 断言语句：assert CONDITION ;
+type AssertStmtNode struct {
+	BaseStmt
+	Condition Expr
+}
+
+// AnnotationStmtNode 注解语句：/* @KEY: VALUE */
+type AnnotationStmtNode struct {
+	BaseStmt
+	Key   string
+	Value string
+}
+
+// DefineStmtNode 定义语句：NAME: VALUE
+type DefineStmtNode struct {
+	BaseStmt
+	Name  string
+	Value Expr
+}
+
+// SelectStmtNode 选择语句：select TARGET
+type SelectStmtNode struct {
+	BaseStmt
+	Target string
+}
+
+// ProgramNode 程序根节点
+type ProgramNode struct {
+	Node
+	Statements []Stmt
+}
+
+// RootNode 兼容旧名称的别名
+type RootNode = ProgramNode

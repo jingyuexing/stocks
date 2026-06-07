@@ -82,6 +82,14 @@ func Lexer(text string) []Token {
 			dot := 0
 			for (isNumberic(ch) || ch == '.') && current < MAXLENGTH {
 				if ch == '.' {
+					// 如果这是第一个 . 且后面紧跟 .. 形成 ...，则 . 不属于数字
+					if dot == 0 && peekChar(1) == '.' && peekChar(2) == '.' {
+						break
+					}
+					// 如果已经有小数点了，再遇到 . 也不属于该数字
+					if dot >= 1 {
+						break
+					}
 					dot++
 				}
 				val += string(ch)
@@ -90,6 +98,78 @@ func Lexer(text string) []Token {
 					ch = runes[current]
 				}
 			}
+			// 只有在没有小数点的情况下才检查时间/日期
+			if dot == 0 {
+				// 时间格式: HH:MM 或 HH:MM:SS
+				if (len(val) == 1 || len(val) == 2) && ch == ':' && isNumberic(peekChar(1)) {
+					mmStart := current + 1
+					mmLen := 0
+					for mmStart+mmLen < MAXLENGTH && isNumberic(runes[mmStart+mmLen]) && mmLen < 2 {
+						mmLen++
+					}
+					if mmLen >= 1 && mmLen <= 2 {
+						ssPos := mmStart + mmLen
+						hasSS := false
+						if ssPos < MAXLENGTH && runes[ssPos] == ':' && ssPos+1 < MAXLENGTH && isNumberic(runes[ssPos+1]) {
+							ssLen := 0
+							for ssPos+1+ssLen < MAXLENGTH && isNumberic(runes[ssPos+1+ssLen]) && ssLen < 2 {
+								ssLen++
+							}
+							if ssLen >= 1 && ssLen <= 2 {
+								hasSS = true
+								for current < ssPos+1+ssLen {
+									val += string(runes[current])
+									nextChar()
+									if current < MAXLENGTH {
+										ch = runes[current]
+									}
+								}
+							}
+						}
+						if !hasSS {
+							for current < mmStart+mmLen {
+								val += string(runes[current])
+								nextChar()
+								if current < MAXLENGTH {
+									ch = runes[current]
+								}
+							}
+						}
+						tokens = append(tokens, createToken(Time, val))
+						continue
+					}
+				}
+
+				// 日期格式: YYYY-MM-DD 或 YYYY/MM/DD
+				if len(val) == 4 && (ch == '-' || ch == '/') && isNumberic(peekChar(1)) {
+					sep := ch
+					mmStart := current + 1
+					mmLen := 0
+					for mmStart+mmLen < MAXLENGTH && isNumberic(runes[mmStart+mmLen]) && mmLen < 2 {
+						mmLen++
+					}
+					if mmLen >= 1 && mmLen <= 2 && mmStart+mmLen < MAXLENGTH && runes[mmStart+mmLen] == sep {
+						ddStart := mmStart + mmLen + 1
+						ddLen := 0
+						for ddStart+ddLen < MAXLENGTH && isNumberic(runes[ddStart+ddLen]) && ddLen < 2 {
+							ddLen++
+						}
+						if ddLen >= 1 && ddLen <= 2 {
+							endPos := ddStart + ddLen
+							for current < endPos {
+								val += string(runes[current])
+								nextChar()
+								if current < MAXLENGTH {
+									ch = runes[current]
+								}
+							}
+							tokens = append(tokens, createToken(Date, val))
+							continue
+						}
+					}
+				}
+			}
+
 			switch dot {
 			case 0:
 				tokens = append(tokens, createToken(Integer, val))
@@ -265,7 +345,7 @@ func Lexer(text string) []Token {
 			}
 		} else if ch == '\u2026' {
 			// 水平省略号 …
-			tokens = append(tokens, createToken(Range, string(ch)))
+			tokens = append(tokens, createToken(Range, "..."))
 			nextChar()
 			continue
 		} else if ch == '.' {

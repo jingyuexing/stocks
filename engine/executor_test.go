@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/jingyuexing/stocks/ast"
 	"github.com/jingyuexing/stocks/engine"
@@ -10,7 +11,7 @@ import (
 
 func TestExecutor_Setup(t *testing.T) {
 	ctx := transformer.NewStockContext()
-	ex := engine.NewExecutor(ctx, ast.RootNode{})
+	ex := engine.NewExecutor(ctx, &ast.ProgramNode{})
 	ex.Setup()
 	// Setup 不应 panic
 }
@@ -18,11 +19,11 @@ func TestExecutor_Setup(t *testing.T) {
 func TestExecutor_BuildAction(t *testing.T) {
 	ctx := transformer.NewStockContext()
 	ctx.SetCode("AAPL")
-	ex := engine.NewExecutor(ctx, ast.RootNode{})
+	ex := engine.NewExecutor(ctx, &ast.ProgramNode{})
 
-	buyExpr := ast.ExpressionNode{
-		Node:   ast.Node{Type: ast.BuyExpression},
-		Params: []ast.Literal{{Node: ast.Node{Type: ast.IntegerLiteral}, Value: "100", Unit: ""}},
+	buyExpr := &ast.ActionStmtNode{
+		Action: "buy",
+		Args:   []ast.Expr{&ast.Literal{Value: "100"}},
 	}
 	act := ex.BuildAction(engine.ActionBuy, buyExpr)
 	if act.Type != engine.ActionBuy {
@@ -35,9 +36,9 @@ func TestExecutor_BuildAction(t *testing.T) {
 		t.Errorf("expected amount 100, got %f", act.Amount)
 	}
 
-	sellExpr := ast.ExpressionNode{
-		Node:   ast.Node{Type: ast.SellExpression},
-		Params: []ast.Literal{{Node: ast.Node{Type: ast.PercentLiteral}, Value: "50", Unit: "%"}},
+	sellExpr := &ast.ActionStmtNode{
+		Action: "sell",
+		Args:   []ast.Expr{&ast.Literal{Value: "50", Unit: "%"}},
 	}
 	act2 := ex.BuildAction(engine.ActionSell, sellExpr)
 	if !act2.IsPercent {
@@ -55,10 +56,13 @@ func TestExecutor_ExecuteBody(t *testing.T) {
 		sellTriggered = true
 	})
 
-	body := []ast.ExpressionNode{
-		{Node: ast.Node{Type: ast.SellExpression}, Params: []ast.Literal{{Node: ast.Node{Type: ast.IntegerLiteral}, Value: "100"}}},
+	body := []ast.Stmt{
+		&ast.ActionStmtNode{
+			Action: "sell",
+			Args:   []ast.Expr{&ast.Literal{Value: "100"}},
+		},
 	}
-	ex := engine.NewExecutor(ctx, ast.RootNode{})
+	ex := engine.NewExecutor(ctx, &ast.ProgramNode{})
 	ex.ExecuteBody(body)
 
 	if !sellTriggered {
@@ -76,17 +80,24 @@ func TestExecutor_GridCheckWithLevelBlock(t *testing.T) {
 		buyTriggered = true
 	})
 
-	astRoot := ast.RootNode{
-		Expression: []ast.ExpressionNode{
-			{
-				Node: ast.Node{Type: ast.GridExpression},
-				Range: &ast.RangeExpressionNode{
-					Node:  ast.Node{Type: ast.RangeExpression},
-					Begin: ast.Literal{Node: ast.Node{Type: ast.FloatLiteral}, Value: "-15"},
-					End:   ast.Literal{Node: ast.Node{Type: ast.FloatLiteral}, Value: "-10"},
-				},
-				Body: []ast.ExpressionNode{
-					{Node: ast.Node{Type: ast.BuyExpression}, Params: []ast.Literal{{Node: ast.Node{Type: ast.IntegerLiteral}, Value: "10"}}},
+	astRoot := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.StrategyStmtNode{
+				Kind: "grid",
+				Body: []ast.Stmt{
+					&ast.FlowStmtNode{
+						Kind: "level",
+						Condition: &ast.RangeExprNode{
+							Begin: &ast.Literal{Value: "-15"},
+							End:   &ast.Literal{Value: "-10"},
+						},
+						Body: []ast.Stmt{
+							&ast.ActionStmtNode{
+								Action: "buy",
+								Args:   []ast.Expr{&ast.Literal{Value: "10"}},
+							},
+						},
+					},
 				},
 			},
 		},
@@ -94,7 +105,8 @@ func TestExecutor_GridCheckWithLevelBlock(t *testing.T) {
 
 	ex := engine.NewExecutor(ctx, astRoot)
 	ex.Setup()
-	ctx.Emiter.Emit("grid_check", ctx, astRoot.Expression[0])
+	ctx.Emiter.Emit("grid_check", ctx)
+	time.Sleep(100 * time.Millisecond)
 
 	if !buyTriggered {
 		t.Error("expected buy to trigger when profit -12% hits level block -15%...-10%")
@@ -111,16 +123,20 @@ func TestExecutor_StopTriggeredLoss(t *testing.T) {
 		sellTriggered = true
 	})
 
-	astRoot := ast.RootNode{
-		Expression: []ast.ExpressionNode{
-			{
-				Node: ast.Node{Type: ast.GridExpression},
-				Body: []ast.ExpressionNode{
-					{
-						Node:   ast.Node{Type: ast.LossExpression},
-						Params: []ast.Literal{{Node: ast.Node{Type: ast.FloatLiteral}, Value: "-10"}},
-						Body: []ast.ExpressionNode{
-							{Node: ast.Node{Type: ast.SellExpression}, Params: []ast.Literal{{Node: ast.Node{Type: ast.IntegerLiteral}, Value: "100"}}},
+	astRoot := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.StrategyStmtNode{
+				Kind: "grid",
+				Body: []ast.Stmt{
+					&ast.FlowStmtNode{
+						Kind:      "level",
+						Mode:      "loss",
+						Condition: &ast.Literal{Value: "-10"},
+						Body: []ast.Stmt{
+							&ast.ActionStmtNode{
+								Action: "sell",
+								Args:   []ast.Expr{&ast.Literal{Value: "100"}},
+							},
 						},
 					},
 				},
@@ -131,6 +147,7 @@ func TestExecutor_StopTriggeredLoss(t *testing.T) {
 	ex := engine.NewExecutor(ctx, astRoot)
 	ex.Setup()
 	ctx.Emiter.Emit("stop_triggered", ctx)
+	time.Sleep(100 * time.Millisecond)
 
 	if !sellTriggered {
 		t.Error("expected sell to trigger when loss -15% exceeds threshold -10%")
@@ -147,13 +164,17 @@ func TestExecutor_StopTriggeredProfit(t *testing.T) {
 		sellTriggered = true
 	})
 
-	astRoot := ast.RootNode{
-		Expression: []ast.ExpressionNode{
-			{
-				Node:   ast.Node{Type: ast.ProfitExpression},
-				Params: []ast.Literal{{Node: ast.Node{Type: ast.FloatLiteral}, Value: "10"}},
-				Body: []ast.ExpressionNode{
-					{Node: ast.Node{Type: ast.SellExpression}, Params: []ast.Literal{{Node: ast.Node{Type: ast.IntegerLiteral}, Value: "50"}}},
+	astRoot := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.FlowStmtNode{
+				Kind:      "level",
+				Mode:      "profit",
+				Condition: &ast.Literal{Value: "10"},
+				Body: []ast.Stmt{
+					&ast.ActionStmtNode{
+						Action: "sell",
+						Args:   []ast.Expr{&ast.Literal{Value: "50"}},
+					},
 				},
 			},
 		},
@@ -162,6 +183,7 @@ func TestExecutor_StopTriggeredProfit(t *testing.T) {
 	ex := engine.NewExecutor(ctx, astRoot)
 	ex.Setup()
 	ctx.Emiter.Emit("stop_triggered", ctx)
+	time.Sleep(100 * time.Millisecond)
 
 	if !sellTriggered {
 		t.Error("expected sell to trigger when profit 15% exceeds threshold 10%")
@@ -178,13 +200,17 @@ func TestExecutor_LossRangeNotHit(t *testing.T) {
 		sellTriggered = true
 	})
 
-	astRoot := ast.RootNode{
-		Expression: []ast.ExpressionNode{
-			{
-				Node:   ast.Node{Type: ast.LossExpression},
-				Params: []ast.Literal{{Node: ast.Node{Type: ast.FloatLiteral}, Value: "-10"}},
-				Body: []ast.ExpressionNode{
-					{Node: ast.Node{Type: ast.SellExpression}, Params: []ast.Literal{{Node: ast.Node{Type: ast.IntegerLiteral}, Value: "100"}}},
+	astRoot := &ast.ProgramNode{
+		Statements: []ast.Stmt{
+			&ast.FlowStmtNode{
+				Kind:      "level",
+				Mode:      "loss",
+				Condition: &ast.Literal{Value: "-10"},
+				Body: []ast.Stmt{
+					&ast.ActionStmtNode{
+						Action: "sell",
+						Args:   []ast.Expr{&ast.Literal{Value: "100"}},
+					},
 				},
 			},
 		},
@@ -193,6 +219,7 @@ func TestExecutor_LossRangeNotHit(t *testing.T) {
 	ex := engine.NewExecutor(ctx, astRoot)
 	ex.Setup()
 	ctx.Emiter.Emit("stop_triggered", ctx)
+	time.Sleep(100 * time.Millisecond)
 
 	if sellTriggered {
 		t.Error("expected sell NOT to trigger when loss -5% does not exceed threshold -10%")
@@ -201,7 +228,7 @@ func TestExecutor_LossRangeNotHit(t *testing.T) {
 
 func TestExecutor_KeepExpired(t *testing.T) {
 	ctx := transformer.NewStockContext()
-	astRoot := ast.RootNode{}
+	astRoot := &ast.ProgramNode{}
 	ex := engine.NewExecutor(ctx, astRoot)
 	ex.Setup()
 	// keep_expired 不应 panic

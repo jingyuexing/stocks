@@ -22,20 +22,17 @@ func Validate(bundle *StrategyBundle) error {
 	}
 
 	// 1. 校验断言（assert）表达式
-	for _, expr := range bundle.AST.Expression {
-		if expr.Type == ast.AssertExpression {
-			if err := validateAssert(bundle, expr); err != nil {
-				return err
-			}
+	for _, stmt := range bundle.AST.Statements {
+		if _, ok := stmt.(*ast.AssertStmtNode); ok {
+			// TODO: 实现常量表达式求值
 		}
 	}
 
 	// 2. 校验策略声明完整性
 	foundStrategy := false
-	for _, expr := range bundle.AST.Expression {
-		switch expr.Type {
-		case ast.GridExpression, ast.LongExpression, ast.ShortExpression,
-			ast.BothExpression, ast.PortfolioExpression:
+	for _, stmt := range bundle.AST.Statements {
+		if strategyStmt, ok := stmt.(*ast.StrategyStmtNode); ok {
+			_ = strategyStmt
 			foundStrategy = true
 		}
 	}
@@ -64,15 +61,5 @@ func Validate(bundle *StrategyBundle) error {
 		}
 	}
 
-	return nil
-}
-
-// validateAssert 对 assert 表达式进行编译期求值（常量表达式）
-// 目前为骨架：若 assert 条件包含运行时变量，则跳过（留到运行期检查）
-func validateAssert(bundle *StrategyBundle, expr ast.ExpressionNode) error {
-	// TODO: 实现常量表达式求值
-	// 如果 assert 条件中不含运行时变量，可在编译期直接判断
-	_ = bundle
-	_ = expr
 	return nil
 }
