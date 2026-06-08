@@ -174,7 +174,7 @@ func TestStockContext_EventFields(t *testing.T) {
 	ctx.SetCode("AAPL")
 	ctx.SetDirection("long")
 	ctx.SetCurrentPrice(150.5)
-	ctx.Vars.Register("volume", func() float64 { return 10000 })
+	ctx.Vars.Register("volume", func(ctx *transformer.StockContext) float64 { return 10000 })
 
 	evt := ctx.NewEvent("test")
 	if evt.Name != "test" {

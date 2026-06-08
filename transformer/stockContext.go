@@ -241,13 +241,15 @@ type MarketDataProvider interface {
 	GetLow(symbol string) float64
 	GetClose(symbol string) float64
 	GetOpen(symbol string) float64
+	GetCost(symbol string) float64
+	GetProfit(symbol string) float64
 }
 
 // VariableResolver 变量解析器 —— 内置变量优先通过 MarketDataProvider 实时查询
 type VariableResolver struct {
 	mu sync.RWMutex
 	// 手动注册的内置变量（优先级最高，用于测试或覆盖）
-	Builtins map[string]func() float64
+	Builtins map[string]func(ctx *StockContext) float64
 	// 用户自定义变量（define / value 语句）
 	UserVars map[string]LiteralValue
 	// 行情数据提供者（运行时自动查询 gateway）
@@ -258,26 +260,26 @@ type VariableResolver struct {
 
 func NewVariableResolver() *VariableResolver {
 	return &VariableResolver{
-		Builtins: make(map[string]func() float64),
+		Builtins: make(map[string]func(ctx *StockContext) float64),
 		UserVars: make(map[string]LiteralValue),
 	}
 }
 
 // Register 手动注册内置变量（优先级高于 Provider）
-func (vr *VariableResolver) Register(name string, fn func() float64) {
+func (vr *VariableResolver) Register(name string, fn func(ctx *StockContext) float64) {
 	vr.mu.Lock()
 	defer vr.mu.Unlock()
 	vr.Builtins[name] = fn
 }
 
 // Resolve 解析变量值，查询优先级：Builtins > Provider > UserVars
-func (vr *VariableResolver) Resolve(name string) float64 {
+func (vr *VariableResolver) Resolve(name string, ctx *StockContext) float64 {
 	vr.mu.RLock()
 	defer vr.mu.RUnlock()
 
 	// 1. 手动注册优先（允许覆盖或测试）
 	if fn, ok := vr.Builtins[name]; ok {
-		return fn()
+		return fn(ctx)
 	}
 
 	// 2. 通过 Provider 实时查询行情
@@ -295,6 +297,8 @@ func (vr *VariableResolver) Resolve(name string) float64 {
 			return vr.Provider.GetClose(vr.Symbol)
 		case "open":
 			return vr.Provider.GetOpen(vr.Symbol)
+		case "profit":
+			return vr.Provider.GetProfit(vr.Symbol)
 		}
 	}
 
@@ -317,9 +321,15 @@ type StockContext struct {
 
 	// 基础状态
 	Start        time.Time
-	BeginPrice   float64
+	BeginPrice   float64 // 建仓价格（持仓成本价）
 	CurrentPrice float64 // 本地缓存价格（无 Provider 时的 fallback）
-	Amount       float64
+	Amount       float64 // 可用资金/头寸金额
+	Volume       float64 // 持仓数量（股数/币量）
+	High         float64 // 周期最高价（本地缓存）
+	Low          float64 // 周期最低价（本地缓存）
+	Open         float64 // 周期开盘价（本地缓存）
+	Close        float64 // 周期收盘价（本地缓存）
+	GridLevel    int     // 当前所在网格层级
 	Emiter       *utils.EventEmit
 
 	// 组合配置（按领域拆分）
@@ -339,6 +349,147 @@ type StockContext struct {
 	keep func(duration int64) bool
 }
 
+// ---------- 内置变量函数 ----------
+
+// ProfitVar 当前浮动盈亏（金额）：(当前价格 - 建仓价格) * 持仓数量
+func ProfitVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	return (ctx.CurrentPrice - ctx.BeginPrice) * ctx.Volume
+}
+
+// ProfitPctVar 当前浮动盈亏（百分比）：(当前价格 - 建仓价格) / 建仓价格 * 100
+func ProfitPctVar(ctx *StockContext) float64 {
+	if ctx == nil || ctx.BeginPrice == 0 {
+		return 0
+	}
+	return (ctx.CurrentPrice - ctx.BeginPrice) / ctx.BeginPrice * 100
+}
+
+// CostVar 持仓成本价（单股/单币成本）
+func CostVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	return ctx.BeginPrice
+}
+
+// AmountVar 可用资金/头寸金额
+func AmountVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	return ctx.Amount
+}
+
+// PositionVar 当前持仓数量
+func PositionVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	return ctx.Volume
+}
+
+// PriceVar 当前市价（无 Provider 时回退到本地缓存）
+func PriceVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	if ctx.Vars.Provider != nil && ctx.Vars.Symbol != "" {
+		if price := ctx.Vars.Provider.GetPrice(ctx.Vars.Symbol); price > 0 {
+			return price
+		}
+	}
+	return ctx.CurrentPrice
+}
+
+// HighVar 周期最高价（无 Provider 时回退到本地缓存）
+func HighVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	if ctx.Vars.Provider != nil && ctx.Vars.Symbol != "" {
+		if v := ctx.Vars.Provider.GetHigh(ctx.Vars.Symbol); v > 0 {
+			return v
+		}
+	}
+	return ctx.High
+}
+
+// LowVar 周期最低价（无 Provider 时回退到本地缓存）
+func LowVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	if ctx.Vars.Provider != nil && ctx.Vars.Symbol != "" {
+		if v := ctx.Vars.Provider.GetLow(ctx.Vars.Symbol); v > 0 {
+			return v
+		}
+	}
+	return ctx.Low
+}
+
+// OpenVar 周期开盘价（无 Provider 时回退到本地缓存）
+func OpenVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	if ctx.Vars.Provider != nil && ctx.Vars.Symbol != "" {
+		if v := ctx.Vars.Provider.GetOpen(ctx.Vars.Symbol); v > 0 {
+			return v
+		}
+	}
+	return ctx.Open
+}
+
+// CloseVar 周期收盘价（无 Provider 时回退到本地缓存）
+func CloseVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	if ctx.Vars.Provider != nil && ctx.Vars.Symbol != "" {
+		if v := ctx.Vars.Provider.GetClose(ctx.Vars.Symbol); v > 0 {
+			return v
+		}
+	}
+	return ctx.Close
+}
+
+// VolumeVar 成交量（无 Provider 时回退到本地缓存）
+func VolumeVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	if ctx.Vars.Provider != nil && ctx.Vars.Symbol != "" {
+		if v := ctx.Vars.Provider.GetVolume(ctx.Vars.Symbol); v > 0 {
+			return v
+		}
+	}
+	return 0 // 成交量无本地缓存，无 Provider 时返回 0
+}
+
+// BeginPriceVar 建仓价格
+func BeginPriceVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	return ctx.BeginPrice
+}
+
+// GridLevelVar 当前所在网格层级
+func GridLevelVar(ctx *StockContext) float64 {
+	if ctx == nil {
+		return 0
+	}
+	return float64(ctx.GridLevel)
+}
+
+// TimeVar 当前时间戳（秒级）
+func TimeVar(ctx *StockContext) float64 {
+	return float64(time.Now().Unix())
+}
+
 // NewStockContext 创建新的执行上下文
 func NewStockContext() *StockContext {
 	ctx := &StockContext{
@@ -346,6 +497,26 @@ func NewStockContext() *StockContext {
 		Emiter: utils.NewEventEmit(),
 		Vars:   NewVariableResolver(),
 	}
+	// 行情类变量（Provider 优先，Builtin 作为 fallback / 本地缓存）
+	ctx.Vars.Register("price", PriceVar)   // 当前市价
+	ctx.Vars.Register("high", HighVar)     // 周期最高价
+	ctx.Vars.Register("low", LowVar)       // 周期最低价
+	ctx.Vars.Register("open", OpenVar)     // 周期开盘价
+	ctx.Vars.Register("close", CloseVar)   // 周期收盘价
+	ctx.Vars.Register("volume", VolumeVar) // 成交量
+
+	// 账户/持仓类变量
+	ctx.Vars.Register("profit", ProfitVar)          // 浮动盈亏（金额）
+	ctx.Vars.Register("profit_per", ProfitPctVar)   // 浮动盈亏（百分比）
+	ctx.Vars.Register("cost", CostVar)              // 持仓成本价
+	ctx.Vars.Register("amount", AmountVar)          // 可用资金/头寸金额
+	ctx.Vars.Register("position", PositionVar)      // 当前持仓数量
+	ctx.Vars.Register("begin_price", BeginPriceVar) // 建仓价格
+
+	// 策略/时间类变量
+	ctx.Vars.Register("grid_level", GridLevelVar) // 当前网格层级
+	ctx.Vars.Register("time", TimeVar)            // 当前时间戳
+
 	return ctx
 }
 
@@ -353,7 +524,7 @@ func NewStockContext() *StockContext {
 func (s *StockContext) NewEvent(name string) *Event {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	price := s.Vars.Resolve("price")
+	price := s.Vars.Resolve("price", s)
 	if price == 0 {
 		price = s.CurrentPrice
 	}
@@ -361,7 +532,7 @@ func (s *StockContext) NewEvent(name string) *Event {
 		Name:      name,
 		Timestamp: time.Now(),
 		Price:     price,
-		Volume:    s.Vars.Resolve("volume"),
+		Volume:    s.Vars.Resolve("volume", s),
 		Code:      s.Strategy.Code,
 		Direction: s.Strategy.Direction,
 	}
@@ -441,6 +612,78 @@ func (s *StockContext) GetCurrentPrice() float64 {
 		}
 	}
 	return s.CurrentPrice
+}
+
+func (s *StockContext) SetHigh(val float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.High = val
+}
+
+func (s *StockContext) GetHigh() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.High
+}
+
+func (s *StockContext) SetLow(val float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Low = val
+}
+
+func (s *StockContext) GetLow() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Low
+}
+
+func (s *StockContext) SetOpen(val float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Open = val
+}
+
+func (s *StockContext) GetOpen() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Open
+}
+
+func (s *StockContext) SetClose(val float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Close = val
+}
+
+func (s *StockContext) GetClose() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Close
+}
+
+func (s *StockContext) SetGridLevel(val int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.GridLevel = val
+}
+
+func (s *StockContext) GetGridLevel() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.GridLevel
+}
+
+func (s *StockContext) SetVolume(val float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Volume = val
+}
+
+func (s *StockContext) GetVolume() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Volume
 }
 
 // ---------- 交易动作 ----------

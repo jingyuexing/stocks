@@ -163,5 +163,5 @@ func (re *RuleEngine) resolveVariable(name string) float64 {
 	if re.ctx == nil || re.ctx.Vars == nil {
 		return 0
 	}
-	return re.ctx.Vars.Resolve(name)
+	return re.ctx.Vars.Resolve(name, re.ctx)
 }

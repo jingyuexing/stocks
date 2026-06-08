@@ -286,3 +286,13 @@ func (p *gatewayProvider) GetClose(symbol string) float64 {
 	// TODO: gateway 接口扩展 GetVolume 后接入
 	return 0
 }
+
+func (p *gatewayProvider) GetCost(symbol string) float64 {
+	// TODO: gateway 接口扩展 GetCost 后接入
+	return 0
+}
+
+func (p *gatewayProvider) GetProfit(symbol string) float64 {
+	// TODO: gateway 接口扩展 GetProfit 后接入
+	return 0
+}
